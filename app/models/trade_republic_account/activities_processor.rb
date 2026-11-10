@@ -11,6 +11,20 @@ class TradeRepublicAccount::ActivitiesProcessor
   # step; the timeline shows only the buy.
   PRIVATE_MARKETS_BONUS_PATTERN = /\bbonus\b/i
   ROUND_UP_EVENT_TYPE = "SPARE_CHANGE_AGGREGATE"
+  # Some Trade Republic event types can be a credit or a debit — a tax
+  # correction can raise the tax, and a Vorabpauschale is a tax charge on
+  # accumulating funds — but their category always says credit, so the
+  # category-based direction books debits as income. For these types only,
+  # the provider's signed amount carries the direction; every other type
+  # keeps the category-based direction, since TR signs are inconsistent
+  # across timeline topics.
+  SIGNED_AMOUNT_EVENT_TYPES = %w[
+    SSP_TAX_CORRECTION
+    ssp_tax_correction_invoice
+    TAX_REFUND
+    SSP_CORPORATE_ACTION_CASH
+    SSP_CORPORATE_ACTION_CASH_NON_DIVIDEND
+  ].freeze
   SAVINGS_PLAN_INVOICE_EVENT_TYPE = "SAVINGS_PLAN_INVOICE_CREATED"
   SAVINGS_PLAN_EXECUTION_EVENT_TYPES = %w[TRADING_SAVINGSPLAN_EXECUTED SAVINGS_PLAN_EXECUTED].freeze
   SETTLEMENT_AMOUNT_TOLERANCE = BigDecimal("0.01")
@@ -459,6 +473,13 @@ class TradeRepublicAccount::ActivitiesProcessor
       amount = parse_decimal(detail[:amount])
       return false unless amount && !amount.zero?
 
+      # The normalized category is the source of truth for direction, except
+      # for the event types in SIGNED_AMOUNT_EVENT_TYPES, whose category
+      # says credit even when the provider amount is a debit. The signed
+      # amount resolves the direction for those; everything else keeps the
+      # category sign.
+      sign = signed_amount_sign(event, detail) || sign
+
       legacy_kind = legacy_cash_kinds[external_id]
       entry = import_adapter.import_transaction(
         external_id: external_id,
@@ -492,6 +513,20 @@ class TradeRepublicAccount::ActivitiesProcessor
       link_settlement_counterpart!(entry) if settles_trade
 
       true
+    end
+
+    # The cash-movement sign implied by the provider's signed amount for the
+    # event types whose category cannot say which way the money moved: -1
+    # for a credit, 1 for a debit. Nil when the event type is not in the
+    # allow-list, or when the signed amount is missing or zero and carries
+    # no direction — the caller then keeps the category sign.
+    def signed_amount_sign(event, detail)
+      return nil unless SIGNED_AMOUNT_EVENT_TYPES.include?(event[:eventType].to_s)
+
+      signed_amount = parse_decimal(detail[:signed_amount])
+      return nil if signed_amount.nil? || signed_amount.zero?
+
+      signed_amount.negative? ? 1 : -1
     end
 
     # The portfolio account holds no cash: Trade Republic settles every trade

@@ -470,6 +470,90 @@ class TradeRepublicAccountActivitiesProcessorTest < ActiveSupport::TestCase
     assert_equal BigDecimal("-500.00"), Entry.find_by(external_id: "trade_republic_event_evt_incoming_signed").amount
   end
 
+  test "tax correction debit is imported as an expense, not income" do
+    import_event({
+      id: "evt_tax_correction_debit",
+      timestamp: "2026-01-15T10:00:00Z",
+      eventType: "SSP_TAX_CORRECTION",
+      category: "PAYMENT_RECEIVED",
+      title: "Tax correction",
+      status: "EXECUTED",
+      detail: { amount: "0.74", signed_amount: "-0.74", currency: "EUR" }
+    })
+
+    assert_equal BigDecimal("0.74"), Entry.find_by(external_id: "trade_republic_event_evt_tax_correction_debit").amount
+  end
+
+  test "tax refund debit is imported as an expense, not income" do
+    import_event({
+      id: "evt_tax_refund_debit",
+      timestamp: "2026-01-15T10:00:00Z",
+      eventType: "TAX_REFUND",
+      category: "PAYMENT_RECEIVED",
+      title: "Tax refund",
+      status: "EXECUTED",
+      detail: { amount: "3.10", signed_amount: "-3.10", currency: "EUR" }
+    })
+
+    assert_equal BigDecimal("3.10"), Entry.find_by(external_id: "trade_republic_event_evt_tax_refund_debit").amount
+  end
+
+  test "tax correction credit stays income" do
+    import_event({
+      id: "evt_tax_correction_credit",
+      timestamp: "2026-01-15T10:00:00Z",
+      eventType: "SSP_TAX_CORRECTION",
+      category: "PAYMENT_RECEIVED",
+      title: "Tax correction",
+      status: "EXECUTED",
+      detail: { amount: "12.00", signed_amount: "12.00", currency: "EUR" }
+    })
+
+    assert_equal BigDecimal("-12.00"), Entry.find_by(external_id: "trade_republic_event_evt_tax_correction_credit").amount
+  end
+
+  test "vorabpauschale charge is imported as an expense, not a dividend" do
+    import_event({
+      id: "evt_vorabpauschale",
+      timestamp: "2026-01-15T10:00:00Z",
+      eventType: "SSP_CORPORATE_ACTION_CASH",
+      category: "DIVIDEND",
+      title: "Vorabpauschale",
+      status: "EXECUTED",
+      detail: { amount: "5.20", signed_amount: "-5.20", currency: "EUR" }
+    })
+
+    assert_equal BigDecimal("5.20"), Entry.find_by(external_id: "trade_republic_event_evt_vorabpauschale").amount
+  end
+
+  test "tax correction without a signed amount keeps the category direction" do
+    import_event({
+      id: "evt_tax_correction_unsigned",
+      timestamp: "2026-01-15T10:00:00Z",
+      eventType: "SSP_TAX_CORRECTION",
+      category: "PAYMENT_RECEIVED",
+      title: "Tax correction",
+      status: "EXECUTED",
+      detail: { amount: "0.74", currency: "EUR" }
+    })
+
+    assert_equal BigDecimal("-0.74"), Entry.find_by(external_id: "trade_republic_event_evt_tax_correction_unsigned").amount
+  end
+
+  test "tax correction with a zero signed amount keeps the category direction" do
+    import_event({
+      id: "evt_tax_correction_zero",
+      timestamp: "2026-01-15T10:00:00Z",
+      eventType: "SSP_TAX_CORRECTION",
+      category: "PAYMENT_RECEIVED",
+      title: "Tax correction",
+      status: "EXECUTED",
+      detail: { amount: "0.74", signed_amount: "0.00", currency: "EUR" }
+    })
+
+    assert_equal BigDecimal("-0.74"), Entry.find_by(external_id: "trade_republic_event_evt_tax_correction_zero").amount
+  end
+
   test "unknown category is skipped without guessing a transaction" do
     assert_no_difference "Entry.count" do
       import_event({
