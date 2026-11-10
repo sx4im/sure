@@ -1440,6 +1440,114 @@ class TradeRepublicClientTest < ActiveSupport::TestCase
     assert_equal "0.5", detail["taxes"]
   end
 
+  test "normalize_event_detail rescales a thousands-separated share quantity" do
+    detail = @client.send(:normalize_event_detail, {
+      "sections" => [
+        { "title" => "Overview", "data" => [
+          { "title" => "Shares", "detail" => { "text" => "1,500" } },
+          { "title" => "Share price", "detail" => { "text" => "€10.12" } },
+          { "title" => "Fee", "detail" => { "text" => "€1.00" } },
+          { "title" => "Total", "detail" => { "text" => "€15,181.00" } }
+        ] },
+        { "data" => [ { "detail" => { "action" => { "payload" => { "instrumentId" => "IE00B5BMR087" } } } } ] }
+      ]
+    }, item: { "title" => "Core S&P 500", "subtitle" => "Buy" })
+
+    # "1,500" parses as 1.5, but the booked amount implies 1500 shares
+    # at the listed price (15180 / 10.12), so the quantity is rescaled.
+    assert_equal "1500.0", detail["quantity"]
+    assert_equal "10.12", detail["price"]
+    assert_equal "15181.0", detail["amount"]
+  end
+
+  test "normalize_event_detail rescales a German thousands-separated share quantity" do
+    detail = @client.send(:normalize_event_detail, {
+      "sections" => [
+        { "title" => "Overview", "data" => [
+          { "title" => "Aktien", "detail" => { "text" => "1.500" } },
+          { "title" => "Aktienkurs", "detail" => { "text" => "10,12 €" } },
+          { "title" => "Gebühr", "detail" => { "text" => "1,00 €" } },
+          { "title" => "Gesamt", "detail" => { "text" => "15.181,00 €" } }
+        ] },
+        { "data" => [ { "detail" => { "action" => { "payload" => { "instrumentId" => "IE00B5BMR087" } } } } ] }
+      ]
+    }, item: { "title" => "Core S&P 500", "subtitle" => "Kaufen" })
+
+    assert_equal "1500.0", detail["quantity"]
+    assert_equal "10.12", detail["price"]
+    assert_equal "15181.0", detail["amount"]
+  end
+
+  test "normalize_event_detail rescales a thousands-separated sell quantity" do
+    detail = @client.send(:normalize_event_detail, {
+      "sections" => [
+        { "title" => "Overview", "data" => [
+          { "title" => "Shares", "detail" => { "text" => "1,500" } },
+          { "title" => "Share price", "detail" => { "text" => "€10.12" } },
+          { "title" => "Fee", "detail" => { "text" => "€1.00" } },
+          { "title" => "Total", "detail" => { "text" => "€15,179.00" } }
+        ] },
+        { "data" => [ { "detail" => { "action" => { "payload" => { "instrumentId" => "IE00B5BMR087" } } } } ] }
+      ]
+    }, item: { "title" => "Core S&P 500", "subtitle" => "Sell" })
+
+    # Sell cash = gross - fee → 15179 = 1500*10.12 - 1, quantity stays negative.
+    assert_equal "-1500.0", detail["quantity"]
+    assert_equal "10.12", detail["price"]
+  end
+
+  test "normalize_event_detail keeps a genuinely fractional thousands-looking quantity" do
+    detail = @client.send(:normalize_event_detail, {
+      "sections" => [
+        { "title" => "Overview", "data" => [
+          { "title" => "Shares", "detail" => { "text" => "1,500" } },
+          { "title" => "Share price", "detail" => { "text" => "€10.12" } },
+          { "title" => "Fee", "detail" => { "text" => "€1.00" } },
+          { "title" => "Total", "detail" => { "text" => "€16.18" } }
+        ] },
+        { "data" => [ { "detail" => { "action" => { "payload" => { "instrumentId" => "IE00B5BMR087" } } } } ] }
+      ]
+    }, item: { "title" => "Core S&P 500", "subtitle" => "Buy" })
+
+    # 1.5 shares at 10.12 plus a 1.00 fee is exactly 16.18, so the parsed
+    # quantity already matches the booked amount and is left alone.
+    assert_equal "1.5", detail["quantity"]
+    assert_equal "10.12", detail["price"]
+  end
+
+  test "normalize_event_detail leaves a thousands-separated quantity alone without a price row" do
+    detail = @client.send(:normalize_event_detail, {
+      "sections" => [
+        { "title" => "Overview", "data" => [
+          { "title" => "Shares", "detail" => { "text" => "1,500" } },
+          { "title" => "Fee", "detail" => { "text" => "€1.00" } },
+          { "title" => "Total", "detail" => { "text" => "€15,181.00" } }
+        ] },
+        { "data" => [ { "detail" => { "action" => { "payload" => { "instrumentId" => "IE00B5BMR087" } } } } ] }
+      ]
+    }, item: { "title" => "Core S&P 500", "subtitle" => "Buy" })
+
+    # With no price row the price is derived from the parsed quantity, so
+    # there is no independent value to check the quantity against.
+    assert_equal "1.5", detail["quantity"]
+    assert_equal "10120.0", detail["price"]
+  end
+
+  test "normalize_event_detail rescales a Transaction row quantity by a million" do
+    detail = @client.send(:normalize_event_detail, {
+      "sections" => [
+        { "title" => "Overview", "data" => [
+          { "title" => "Transaction", "detail" => { "text" => "1,500 × €0.01" } },
+          { "title" => "Total", "detail" => { "text" => "€15,000.00" } }
+        ] }
+      ]
+    }, item: { "title" => "Penny Stock", "subtitle" => "Buy" })
+
+    # 1,500,000 shares at 0.01: the x1000 rescale does not fit, x1000000 does.
+    assert_equal "1500000.0", detail["quantity"]
+    assert_equal "0.01", detail["price"]
+  end
+
   test "normalize_event_detail reads the exact share price from the Transaction row" do
     detail = @client.send(:normalize_event_detail, {
       "sections" => [

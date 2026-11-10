@@ -1740,6 +1740,17 @@ class Provider::TradeRepublicClient
         gross = quantity.negative? ? amount.abs + deductions : amount.abs - deductions
         price = gross / quantity.abs if gross.positive?
       end
+      # A thousands separator without decimals is ambiguous in the display
+      # text: "1,500" and "1.500" both parse as 1.5, so a buy of 1,500
+      # shares imports as 1.5 shares with a 1,000x inflated price. When the
+      # detail carries its own price, the booked amount implies the quantity
+      # independently (gross / price), so rescale the parsed quantity when
+      # it is off by a factor of 1,000 (or 1,000,000). Anything else keeps
+      # the parsed value, so a genuinely fractional quantity is never
+      # rewritten. With no price row the price above is derived from the
+      # parsed quantity, so there is nothing independent to check against
+      # and the quantity is left alone.
+      quantity = rescale_thousands_quantity(quantity, price, amount, fee_amount, tax_amount) if price_source
       return nil if quantity.nil? && amount.nil?
 
       {
@@ -1755,6 +1766,23 @@ class Provider::TradeRepublicClient
         "dividend_per_share" => decimal_string(dividend_per_share),
         "instrument_type" => (BOND_INSTRUMENT_TYPE if nominal)
       }.compact
+    end
+
+    def rescale_thousands_quantity(quantity, price, amount, fee_amount, tax_amount)
+      return quantity if quantity.nil? || quantity.zero? || price.nil? || !price.positive? || amount.nil?
+
+      deductions = fee_amount.to_d.abs + tax_amount.to_d.abs
+      gross = quantity.negative? ? amount.abs + deductions : amount.abs - deductions
+      return quantity unless gross.positive?
+
+      implied = gross / price
+      return quantity if (implied - quantity.abs).abs / implied <= BigDecimal("0.01")
+
+      [ 1000, 1_000_000 ].each do |factor|
+        scaled = quantity.abs * factor
+        return quantity.negative? ? -scaled : scaled if (implied - scaled).abs / implied <= BigDecimal("0.02")
+      end
+      quantity
     end
 
     def collect_sections(node, result = [], untitled_tables: false)
