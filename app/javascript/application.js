@@ -45,6 +45,27 @@ HwComboboxController.prototype._filterAsync = async function(inputType) {
   }
 };
 
+// Keep a typed free-text value when the combobox closes before its async
+// suggestions resolve: while a query is still in flight the hidden field is
+// empty and no option is selected, so the stock close path treats the query
+// as unjustifiably blank and clears it. Locking the query in as the new
+// option first is exactly what the suggestions response would have done
+// once it arrived.
+const originalClose = HwComboboxController.prototype.close;
+HwComboboxController.prototype.close = function(inputType) {
+  if (
+    this._isSingleSelect &&
+    this.hasNameWhenNewValue &&
+    this._isQueried &&
+    this._hasEmptyFieldValue &&
+    !this._selectedOptionElement
+  ) {
+    this._selectNew();
+  }
+
+  return originalClose.call(this, inputType);
+};
+
 // Fix Back after a frame visit with data-turbo-action (the period picker).
 // Turbo promotes it to a page visit that renders nothing, because turbo_rails'
 // frame layout has none of the page's data-turbo-track assets, so Turbo never

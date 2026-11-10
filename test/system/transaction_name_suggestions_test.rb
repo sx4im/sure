@@ -29,6 +29,47 @@ class TransactionNameSuggestionsTest < ApplicationSystemTestCase
     assert_equal categories(:food_and_drink), entry.entryable.category
   end
 
+  test "a new description is kept when tapping out before name suggestions return" do
+    open_new_transaction
+
+    # Hold the suggestions response in flight, as on a slow mobile
+    # connection: the combobox closes while the query is still unresolved.
+    page.execute_script(<<~JS)
+      window.nameSuggestionsHeld = [];
+      if (!window.nameSuggestionsFetchHeld) {
+        window.nameSuggestionsFetchHeld = true;
+        const originalFetch = window.fetch;
+        window.fetch = (url, init) => {
+          const requestUrl = new URL(url, window.location.href);
+          if (requestUrl.pathname === "/transactions/name_suggestions") {
+            document.documentElement.dataset.nameSearchRequested = "1";
+            return new Promise((resolve) => { window.nameSuggestionsHeld.push(resolve); });
+          }
+          return originalFetch(url, init);
+        };
+      }
+    JS
+
+    fill_in "entry_name", with: "Corner bakery run"
+    assert_selector "html[data-name-search-requested]"
+
+    # Tap out of the description field while suggestions are still pending.
+    find("input[name='entry[amount]']").set("12.34")
+    assert_field "entry_name", with: "Corner bakery run"
+
+    # A late suggestions response must not clobber the kept description.
+    page.execute_script(<<~JS)
+      window.nameSuggestionsHeld.splice(0).forEach((resolve) => {
+        resolve(new Response("", { status: 200, headers: { "Content-Type": "text/vnd.turbo-stream.html" } }));
+      });
+    JS
+    assert_field "entry_name", with: "Corner bakery run"
+
+    click_button "Add transaction"
+    assert_created_transaction "Corner bakery run"
+    assert_equal "Corner bakery run", accounts(:depository).entries.find_by!(name: "Corner bakery run").name
+  end
+
   test "blank names keep the live category and merchant preview and save the generated name" do
     open_new_transaction
     select_starbucks
