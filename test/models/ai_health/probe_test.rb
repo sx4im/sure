@@ -273,6 +273,36 @@ class AiHealth::ProbeTest < ActiveSupport::TestCase
     assert result.passing?
   end
 
+  test "PDF vision probe passes when Anthropic returns symbol keys in tool input" do
+    # The Anthropic SDK hands tool-use input back with symbol keys, unlike the
+    # JSON-parsed string keys in the OpenAI path. The probe digs with string
+    # keys, so without normalization this always fails with invalid_response.
+    tool_use = Struct.new(:type, :input).new(
+      :tool_use,
+      {
+        document_type: "bank_statement",
+        summary: "A synthetic bank statement containing no customer data.",
+        extracted_data: {
+          institution_name: AiHealth::Probe::PDF_TEST_INSTITUTION,
+          account_holder: "Health Check"
+        }
+      }
+    )
+    response = Struct.new(:content, :usage).new([ tool_use ], nil)
+    messages = mock("anthropic_messages")
+    messages.expects(:create).returns(response)
+    @probe.stubs(:anthropic_client).returns(stub(messages: messages))
+
+    result = @probe.pdf_vision_processing(
+      provider: :anthropic,
+      endpoint: "https://api.anthropic.com",
+      access_token: "token",
+      model: "claude-sonnet-4-6"
+    )
+
+    assert result.passing?
+  end
+
   test "failed LLM probe writes a system-wide debug entry and Rails log without secrets" do
     models = stub(list: { "data" => [ { "id" => "another-model" } ] })
     @probe.stubs(:openai_client).returns(stub(models: models))
