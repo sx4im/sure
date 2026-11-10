@@ -1731,6 +1731,10 @@ class Provider::TradeRepublicClient
       price ||= quotation / 100 if quotation
       dividend_per_share = decimal_from_row(find_row(rows, DIVIDEND_PER_SHARE_TITLES))
       price ||= transaction_unit_price(find_row(rows, TRANSACTION_TITLES))
+      # A lone thousands separator with no decimals is ambiguous ("1,500"
+      # and "1.500" both parse as 1.5), so cross-check the quantity against
+      # the booked amount and the share price before deriving a price.
+      quantity = rescale_quantity_to_amount(quantity, amount, price, fee_amount, tax_amount)
       price_source = PRICE_SOURCE_DETAIL if price
       if price.nil? && quantity&.nonzero? && amount
         # Provider cash totals embed costs: buy total = gross + fees/taxes,
@@ -1809,6 +1813,30 @@ class Provider::TradeRepublicClient
       BigDecimal(normalized)
     rescue ArgumentError
       nil
+    end
+
+    # A thousands separator without decimals is ambiguous: "1,500" (English)
+    # and "1.500" (German) both parse as 1.5, so a 1,500-share order imports
+    # 1,000x too small. The booked amount and the share price imply the real
+    # quantity, so prefer the parsed value scaled by 1,000 (or 1,000,000)
+    # when that fits within 1%. The scaled value wins over the implied one
+    # because the displayed price is often rounded.
+    def rescale_quantity_to_amount(quantity, amount, price, fee_amount, tax_amount)
+      return quantity if quantity.nil? || amount.nil? || price.nil? || price.zero?
+
+      deductions = fee_amount.to_d.abs + tax_amount.to_d.abs
+      gross = quantity.negative? ? amount.abs + deductions : amount.abs - deductions
+      return quantity unless gross.positive?
+
+      implied = gross / price.abs
+      return quantity if implied.zero?
+      return quantity if (quantity.abs - implied).abs / implied <= 0.01
+
+      [ 1000, 1_000_000 ].each do |factor|
+        scaled = quantity.abs * factor
+        return quantity * factor if (scaled - implied).abs / implied <= 0.01
+      end
+      quantity
     end
 
     def quantity_from_raw(raw)
