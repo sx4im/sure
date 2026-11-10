@@ -100,6 +100,45 @@ class SharesightAccount::ProcessorTest < ActiveSupport::TestCase
     assert_equal "XNAS", @account.holdings.joins(:security).find_by(securities: { ticker: "AAPL" }).security.exchange_operating_mic
   end
 
+  test "a sold position's latest row is zeroed so it leaves current holdings" do
+    old = Security.find_by!(ticker: "OLD", exchange_operating_mic: "XASX")
+    @account.holdings.create!(
+      security: old, provider_security: old, qty: 50, price: 40, amount: 2000,
+      currency: "AUD", date: Date.current - 1, account_provider: @sharesight_account.account_provider
+    )
+
+    process
+
+    assert_equal BigDecimal("0"), @account.holdings.where(security: old).order(date: :desc).first.qty
+    assert_empty @account.current_holdings.where(security: old)
+  end
+
+  test "a position sold between two syncs on the same day is zeroed" do
+    sold = HOLDINGS.map do |holding|
+      holding.dig("instrument", "code") == "OLD" ? holding.merge("quantity" => 50.0, "value" => 2000.0) : holding
+    end
+    @sharesight_account.update!(raw_holdings_payload: sold)
+    process
+
+    old_row = @account.holdings.where(date: Date.current).joins(:security).find_by!(securities: { ticker: "OLD" })
+    assert_equal BigDecimal("50"), old_row.qty
+
+    @sharesight_account.update!(raw_holdings_payload: HOLDINGS)
+    process
+
+    assert_equal BigDecimal("0"), old_row.reload.qty
+    assert_empty @account.current_holdings.joins(:security).where(securities: { ticker: "OLD" })
+  end
+
+  test "a holding with no quantity at all is left alone" do
+    unknown = { "id" => 6, "instrument" => { "code" => "MYST", "market_code" => "ASX" } }
+    @sharesight_account.update!(raw_holdings_payload: HOLDINGS + [ unknown ])
+
+    process
+
+    assert_empty @account.holdings.joins(:security).where(securities: { ticker: "MYST" })
+  end
+
   test "books buys, sells and opening balances, skipping splits" do
     result = process
 

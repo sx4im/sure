@@ -25,6 +25,7 @@ class SharesightAccount::CashRouter
     @sharesight_account = sharesight_account
     @movements = movements
     @notices = []
+    @touched_settlement_account_ids = Set.new
   end
 
   def route
@@ -36,6 +37,13 @@ class SharesightAccount::CashRouter
     remove_stale_offsets(units)
     remove_stale_counterparts(counterpart_ids)
     report_unsettled(units)
+  end
+
+  # Manual settlement accounts this run wrote counterpart entries to, or
+  # removed stale counterparts from. Their stored balances are stale until
+  # they sync, and nothing else schedules that sync.
+  def touched_settlement_accounts
+    Account.where(id: @touched_settlement_account_ids.to_a)
   end
 
   private
@@ -191,6 +199,9 @@ class SharesightAccount::CashRouter
         nil
       elsif unit.target && !bank_fed?(unit.target)
         counterpart = book_counterpart(unit)
+        # The entry is booked even if linking it fails below, so record the
+        # touch before the link: the account's balance changed either way.
+        @touched_settlement_account_ids << unit.target.id
         link_transfer!(leg, counterpart)
         counterpart.id
       end
@@ -248,11 +259,12 @@ class SharesightAccount::CashRouter
     # By entry id, since a counterpart keeps its external id when the settlement
     # account changes, and the old account's copy has to go.
     def remove_stale_counterparts(current)
-      Entry.joins(:account)
+      stale = Entry.joins(:account)
         .where(accounts: { family_id: account.family_id }, source: "sharesight")
         .where("entries.external_id LIKE ?", "#{Entry.sanitize_sql_like("#{COUNTERPART_PREFIX}#{@sharesight_account.id}_")}%")
         .where.not(id: current)
-        .destroy_all
+      @touched_settlement_account_ids.merge(stale.distinct.pluck(:account_id))
+      stale.destroy_all
     end
 
     def report_unsettled(units)

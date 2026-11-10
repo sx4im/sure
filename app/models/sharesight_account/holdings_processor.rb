@@ -30,13 +30,19 @@ class SharesightAccount::HoldingsProcessor
     def process_holding(holding)
       instrument = holding["instrument"] || {}
       quantity = parse_decimal(holding["quantity"])
-      # Sold holdings come back with no units, and "limited" ones (hidden on
-      # cheaper plans) have no numbers at all.
-      return unless quantity&.positive?
+      # "Limited" holdings (hidden on cheaper plans) have no numbers at all,
+      # so there is nothing to tell one from a sold position.
       return if holding["limited"]
+      return unless quantity
 
       security = resolve_security(instrument["code"], instrument["market_code"], instrument["name"])
       return unless security
+
+      # A holding Sharesight reports with no units was sold. Nothing is
+      # imported for it, so its latest row keeps showing in current holdings
+      # until a newer snapshot arrives; zero that row instead.
+      return zero_sold_holding(security) if quantity.zero?
+      return unless quantity.positive?
 
       currency, price = holding_price(holding, quantity)
       return unless price
@@ -65,6 +71,22 @@ class SharesightAccount::HoldingsProcessor
         provider_key: "sharesight",
         metadata: { holding_id: holding["id"], sharesight_account_id: @sharesight_account.id }
       )
+    end
+
+    # Zeroes the latest provider row for a sold security in place. Writing a
+    # new row would move the snapshot forward, but the row's date is the
+    # snapshot it was, and current_holdings already leaves zero quantities
+    # out, so the position disappears without rewriting its history.
+    def zero_sold_holding(security)
+      provider_id = @sharesight_account.account_provider&.id
+      return unless provider_id
+
+      holding = account.holdings
+        .where(account_provider_id: provider_id)
+        .where("provider_security_id = :id OR (provider_security_id IS NULL AND security_id = :id)", id: security.id)
+        .order(date: :desc)
+        .first
+      holding&.update!(qty: 0, amount: 0)
     end
 
     # Use the instrument's own price and currency when we have both, otherwise

@@ -21,6 +21,7 @@ class SharesightAccount::Processor
     SharesightAccount::FundingMirror.new(sharesight_account).mirror
 
     update_account_balance!
+    sync_settlement_accounts!(router)
 
     account.broadcast_sync_complete
     result.merge(notices: router.notices + drift_notices)
@@ -44,6 +45,17 @@ class SharesightAccount::Processor
       )
       account.save!
       account.set_current_balance(total_balance)
+    end
+
+    # The router books counterpart entries into manual settlement accounts,
+    # but only the portfolio accounts are synced afterwards, so a settlement
+    # account's stored balance would sit stale until something else syncs it.
+    def sync_settlement_accounts!(router)
+      router.touched_settlement_accounts.each do |settlement_account|
+        next if settlement_account.pending_deletion? || settlement_account.disabled?
+
+        settlement_account.sync_later
+      end
     end
 
     # Zero once the cash lives somewhere else. While the broker has it, either

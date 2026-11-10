@@ -123,6 +123,32 @@ class SharesightAccount::CashRouterTest < ActiveSupport::TestCase
     assert_equal BigDecimal("-30"), @bank.entries.find_by!(external_id: "sharesight_counterpart_#{@sharesight_account.id}_payout_50").amount
   end
 
+  test "a manual settlement account is synced after counterparts are booked" do
+    process
+
+    assert @bank.syncs.exists?
+  end
+
+  test "no settlement sync is scheduled when the cash isn't tracked in Sure" do
+    @sharesight_account.update!(cash_mode: "untracked", settlement_account: nil)
+
+    process
+
+    assert_empty @bank.syncs
+  end
+
+  test "switching manual settlement accounts syncs both the old and the new account" do
+    process
+    @bank.syncs.destroy_all
+    ing = @family.accounts.create!(name: "ING Savings", balance: 0, currency: "AUD", accountable: Depository.new)
+    @sharesight_account.update!(settlement_account: ing)
+
+    process
+
+    assert @bank.syncs.exists?, "the old account's removed counterparts leave its balance stale"
+    assert ing.syncs.exists?
+  end
+
   test "a reinvested dividend's leftover is linked when the bank feed shows it" do
     bank_fed!
     @sharesight_account.update!(raw_payouts_payload: [ REINVESTED ])
