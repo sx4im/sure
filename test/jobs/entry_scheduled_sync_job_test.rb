@@ -6,7 +6,7 @@ class EntryScheduledSyncJobTest < ActiveJob::TestCase
   test "schedule_for enqueues a job for the entry's date when scheduled" do
     entry = create_transaction(account: accounts(:depository), date: 3.days.from_now.to_date)
 
-    assert_enqueued_with(job: EntryScheduledSyncJob, args: [ entry.id ]) do
+    assert_enqueued_with(job: EntryScheduledSyncJob, args: [ entry.id, entry.account_id ]) do
       EntryScheduledSyncJob.schedule_for(entry)
     end
   end
@@ -18,6 +18,21 @@ class EntryScheduledSyncJobTest < ActiveJob::TestCase
 
     assert_enqueued_with(job: EntryScheduledSyncJob, at: expected_run_at) do
       EntryScheduledSyncJob.schedule_for(entry)
+    end
+  end
+
+  test "schedule_for enqueues a job when the entry is tomorrow only in the family's timezone" do
+    families(:dylan_family).update!(timezone: "America/Los_Angeles")
+
+    # 04:00 UTC is 20:00 the previous day in Los Angeles: the app is already
+    # on 2026-11-11, but for the family it is still 2026-11-10.
+    travel_to Time.utc(2026, 11, 11, 4, 0) do
+      entry = create_transaction(account: accounts(:depository), date: Date.new(2026, 11, 11))
+      expected_run_at = entry.date.in_time_zone("America/Los_Angeles") + 5.minutes
+
+      assert_enqueued_with(job: EntryScheduledSyncJob, at: expected_run_at) do
+        EntryScheduledSyncJob.schedule_for(entry)
+      end
     end
   end
 
@@ -42,12 +57,36 @@ class EntryScheduledSyncJobTest < ActiveJob::TestCase
     end
   end
 
+  test "schedule_for_entries enqueues jobs for entries that are tomorrow only in the family's timezone" do
+    families(:dylan_family).update!(timezone: "America/Los_Angeles")
+
+    # Same clock as above: the app is on 2026-11-11 while the family is
+    # still on 2026-11-10, so the app-zone date filter used to drop these.
+    travel_to Time.utc(2026, 11, 11, 4, 0) do
+      entry = create_transaction(account: accounts(:depository), date: Date.new(2026, 11, 11))
+
+      assert_enqueued_jobs 1, only: EntryScheduledSyncJob do
+        EntryScheduledSyncJob.schedule_for_entries(Entry.where(id: entry.id))
+      end
+    end
+  end
+
   test "perform triggers a sync for the entry's account" do
     entry = create_transaction(account: accounts(:depository), date: 3.days.from_now.to_date)
 
     Account.any_instance.expects(:sync_later).once
 
     EntryScheduledSyncJob.perform_now(entry.id)
+  end
+
+  test "perform syncs the account when the representative entry was deleted" do
+    entry = create_transaction(account: accounts(:depository), date: 3.days.from_now.to_date)
+    account_id = entry.account_id
+    entry.destroy!
+
+    Account.any_instance.expects(:sync_later).once
+
+    EntryScheduledSyncJob.perform_now(entry.id, account_id)
   end
 
   test "perform is a no-op when the entry no longer exists" do
