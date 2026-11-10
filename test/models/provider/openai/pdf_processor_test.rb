@@ -121,6 +121,42 @@ class Provider::Openai::PdfProcessorTest < ActiveSupport::TestCase
     assert_equal expected, processor.process
   end
 
+  test "vision mode raises a coded error when the model truncates the reply to nothing" do
+    client = mock
+    client.expects(:chat).returns(
+      "choices" => [ { "finish_reason" => "length", "message" => { "content" => "" } } ]
+    )
+    processor = Provider::Openai::PdfProcessor.new(client, model: "gpt-4.1", pdf_content: @pdf_content,
+      max_response_tokens: 512, processing_mode: :vision)
+    processor.stubs(:convert_pdf_to_images).returns([ "base64-image" ])
+
+    error = assert_raises(Provider::Openai::Error) { processor.process }
+
+    assert_equal :response_truncated, error.failure_code
+  end
+
+  test "vision mode still parses a usable reply that stopped at the token limit" do
+    client = mock
+    client.expects(:chat).returns(
+      "choices" => [ {
+        "finish_reason" => "length",
+        "message" => {
+          "content" => {
+            document_type: "bank_statement", summary: "Statement",
+            extracted_data: { institution_name: "Health Check Bank" }
+          }.to_json
+        }
+      } ]
+    )
+    processor = Provider::Openai::PdfProcessor.new(client, model: "gpt-4.1", pdf_content: @pdf_content,
+      max_response_tokens: 512, processing_mode: :vision)
+    processor.stubs(:convert_pdf_to_images).returns([ "base64-image" ])
+
+    result = processor.process
+
+    assert_equal "bank_statement", result.document_type
+  end
+
   %w[gpt-6-sol gpt-6.1-sol].each do |model|
     test "#{model} PDF vision uses the completion token budget" do
       client = mock

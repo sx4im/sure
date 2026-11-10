@@ -239,6 +239,103 @@ class AiHealth::ProbeTest < ActiveSupport::TestCase
     assert_equal :invalid_response, result.failure_code
   end
 
+  test "PDF vision probe retries once with a larger budget when the response is truncated by the token limit" do
+    truncated = {
+      "choices" => [ { "finish_reason" => "length", "message" => { "content" => "" } } ]
+    }
+    valid = {
+      "choices" => [
+        {
+          "finish_reason" => "stop",
+          "message" => {
+            "content" => {
+              document_type: "bank_statement",
+              summary: "A synthetic bank statement containing no customer data.",
+              extracted_data: {
+                institution_name: AiHealth::Probe::PDF_TEST_INSTITUTION
+              }
+            }.to_json
+          }
+        }
+      ]
+    }
+    client = mock("openai_client")
+    budgets = []
+    client.expects(:chat).twice.with do |params|
+      budgets << params.dig(:parameters, :max_tokens)
+      true
+    end.returns(truncated, valid)
+    @probe.stubs(:openai_client).returns(client)
+    Provider::Openai::PdfProcessor.any_instance.stubs(:convert_pdf_to_images).returns([ "encoded-page" ])
+
+    result = @probe.pdf_vision_processing(
+      provider: :openai,
+      endpoint: "https://api.cloudflare.example.test/v1",
+      access_token: "token",
+      model: "vision-model",
+      openai_compatible: true
+    )
+
+    assert result.passing?
+    assert_equal [ AiHealth::Probe::PDF_MAX_RESPONSE_TOKENS, AiHealth::Probe::PDF_TRUNCATED_RESPONSE_RETRY_TOKENS ], budgets
+  end
+
+  test "PDF vision probe reports token exhaustion explicitly when the retry is truncated too" do
+    truncated = {
+      "choices" => [ { "finish_reason" => "length", "message" => { "content" => "" } } ]
+    }
+    client = mock("openai_client")
+    client.expects(:chat).twice.returns(truncated, truncated)
+    @probe.stubs(:openai_client).returns(client)
+    Provider::Openai::PdfProcessor.any_instance.stubs(:convert_pdf_to_images).returns([ "encoded-page" ])
+    Rails.logger.stubs(:error)
+    DebugLogEntry.stubs(:capture)
+
+    result = @probe.pdf_vision_processing(
+      provider: :openai,
+      endpoint: "https://api.cloudflare.example.test/v1",
+      access_token: "token",
+      model: "vision-model",
+      openai_compatible: true
+    )
+
+    assert result.failing?
+    assert_equal :response_truncated, result.failure_code
+  end
+
+  test "PDF vision probe does not retry a response that is invalid for another reason" do
+    response = {
+      "choices" => [
+        {
+          "message" => {
+            "content" => {
+              document_type: "bank_statement",
+              summary: "A different bank statement.",
+              extracted_data: { institution_name: "Another Bank" }
+            }.to_json
+          }
+        }
+      ]
+    }
+    client = mock("openai_client")
+    client.expects(:chat).once.returns(response)
+    @probe.stubs(:openai_client).returns(client)
+    Provider::Openai::PdfProcessor.any_instance.stubs(:convert_pdf_to_images).returns([ "encoded-page" ])
+    Rails.logger.stubs(:error)
+    DebugLogEntry.stubs(:capture)
+
+    result = @probe.pdf_vision_processing(
+      provider: :openai,
+      endpoint: "https://api.cloudflare.example.test/v1",
+      access_token: "token",
+      model: "vision-model",
+      openai_compatible: true
+    )
+
+    assert result.failing?
+    assert_equal :invalid_response, result.failure_code
+  end
+
   test "PDF vision probe sends the synthetic PDF as an Anthropic document block" do
     tool_use = Struct.new(:type, :input).new(
       :tool_use,

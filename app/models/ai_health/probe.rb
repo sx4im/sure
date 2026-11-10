@@ -44,6 +44,10 @@ class AiHealth
       "Synthetic data only. No customer data."
     ].freeze
     PDF_MAX_RESPONSE_TOKENS = 512
+    # Retry budget when a reasoning model spends the default budget thinking
+    # and truncates the answer to nothing: 2,048 leaves room for both the
+    # reasoning trace and the short JSON answer the probe expects.
+    PDF_TRUNCATED_RESPONSE_RETRY_TOKENS = 2_048
 
     Result = Data.define(:status, :checked_at, :failure_code, :http_status) do
       def passing?
@@ -234,14 +238,9 @@ class AiHealth
           result = Timeout.timeout(timeout) do
             case provider
             when :openai
-              Provider::Openai::PdfProcessor.new(
-                openai_client(access_token:, endpoint:),
-                model: model,
-                pdf_content: synthetic_pdf,
-                custom_provider: openai_compatible,
-                max_response_tokens: PDF_MAX_RESPONSE_TOKENS,
-                processing_mode: processing_mode
-              ).process
+              process_openai_pdf_with_retry(
+                access_token:, endpoint:, model:, openai_compatible:, processing_mode:
+              )
             when :anthropic
               raise Failure, :unsupported_provider unless processing_mode == :vision
 
@@ -257,6 +256,36 @@ class AiHealth
 
           raise Failure, :invalid_response unless valid_pdf_result?(result)
         end
+      end
+
+      # A reasoning model can spend the default budget thinking before emitting
+      # anything, so the answer comes back truncated to nothing. The processor
+      # surfaces that as :response_truncated; retry once with a roomier budget
+      # instead of failing the health check for a model that works fine given
+      # more room. Any other failure is raised as-is, with no retry.
+      def process_openai_pdf_with_retry(access_token:, endpoint:, model:, openai_compatible:, processing_mode:)
+        process_openai_pdf(
+          access_token:, endpoint:, model:, openai_compatible:, processing_mode:,
+          max_response_tokens: PDF_MAX_RESPONSE_TOKENS
+        )
+      rescue Provider::Openai::Error => error
+        raise unless error.failure_code == :response_truncated
+
+        process_openai_pdf(
+          access_token:, endpoint:, model:, openai_compatible:, processing_mode:,
+          max_response_tokens: PDF_TRUNCATED_RESPONSE_RETRY_TOKENS
+        )
+      end
+
+      def process_openai_pdf(access_token:, endpoint:, model:, openai_compatible:, processing_mode:, max_response_tokens:)
+        Provider::Openai::PdfProcessor.new(
+          openai_client(access_token:, endpoint:),
+          model: model,
+          pdf_content: synthetic_pdf,
+          custom_provider: openai_compatible,
+          max_response_tokens: max_response_tokens,
+          processing_mode: processing_mode
+        ).process
       end
 
       def run(component:, provider_key:, endpoint: nil, model: nil, credential: nil, dimensions: nil, verification: nil)

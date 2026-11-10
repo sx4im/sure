@@ -254,6 +254,18 @@ class Provider::Openai::PdfProcessor
 
     def parse_response_generic(response)
       raw = response.dig("choices", 0, "message", "content")
+
+      # A length-limited empty reply means the model spent the whole token
+      # budget before producing anything, which reasoning models do; surface
+      # it explicitly so callers can retry with a larger budget instead of
+      # this silently becoming an "other" document with no extracted data.
+      if raw.blank? && response.dig("choices", 0, "finish_reason") == "length"
+        raise Provider::Openai::Error.new(
+          "PDF processing response was truncated by the model's token limit",
+          failure_code: :response_truncated
+        )
+      end
+
       parsed = parse_json_flexibly(raw)
 
       [ build_result(parsed), response["usage"] ]
