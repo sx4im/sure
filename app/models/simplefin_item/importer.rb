@@ -541,10 +541,13 @@ class SimplefinItem::Importer
       # SIMPLEFIN_INCLUDE_PENDING config. This allows users to disable pending transactions
       # if their bank's SimpleFIN integration produces duplicates when pending→posted.
       #
-      # Failed syncs do not move last_synced_at, so the window grows while a
-      # connection keeps failing. Split it into ranges the Bridge accepts, and
-      # stop at the same one-year lookback as the chunked history import.
-      start_date = [ determine_sync_start_date, 1.year.ago.beginning_of_day ].max
+      # Failed syncs do not move last_synced_at, so the next attempt would
+      # re-request the whole range. Split it into ranges the Bridge accepts,
+      # resume from the end of the last fully imported window when one was
+      # recorded, and stop at the same one-year lookback as the chunked
+      # history import.
+      resume_from = simplefin_item.regular_sync_resume_at
+      start_date = [ determine_sync_start_date, resume_from, 1.year.ago.beginning_of_day ].compact.max
       windows = request_windows(start_date, Time.current)
       log_sync_event("info", "SimpleFIN regular sync from #{start_date.to_date} in #{windows.size} request(s)",
         last_synced_at: simplefin_item.last_synced_at, start_date: start_date.to_date, requests: windows.size)
@@ -579,7 +582,15 @@ class SimplefinItem::Importer
             persist_stats!
           end
         end
+
+        # This window is fully imported, so remember its end: if a later
+        # window fails, the next sync resumes from here instead of
+        # re-requesting every window from the start.
+        simplefin_item.update!(regular_sync_resume_at: window_end)
       end
+
+      # Every window imported: the resume point is no longer needed.
+      simplefin_item.update!(regular_sync_resume_at: nil)
     end
 
     # Splits start_date..end_date into consecutive ranges of at most

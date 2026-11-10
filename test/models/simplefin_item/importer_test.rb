@@ -223,6 +223,48 @@ class SimplefinItem::ImporterTest < ActiveSupport::TestCase
     end
   end
 
+  test "a regular sync resumes from the last fully imported window after a failure" do
+    travel_to Time.zone.parse("2026-11-07 12:00") do
+      @item.stubs(:last_synced_at).returns(100.days.ago)
+      simplefin_account = link_simplefin_account("sf_resume_1")
+      provider, ranges = recording_provider(account_id: "sf_resume_1", fail_on_dated_call: 2)
+
+      assert_raises(Provider::Simplefin::SimplefinError) do
+        SimplefinItem::Importer.new(@item, simplefin_provider: provider).send(:import_regular_sync)
+      end
+
+      # Only the first window was requested, and its end is the resume point.
+      assert_equal 1, ranges.size
+      assert_equal ranges.first.last.to_i, @item.reload.regular_sync_resume_at.to_i
+
+      # The retry starts at the recorded window end and imports the rest.
+      resume_at = @item.reload.regular_sync_resume_at
+      provider, ranges = recording_provider(account_id: "sf_resume_1")
+      SimplefinItem::Importer.new(@item, simplefin_provider: provider).send(:import_regular_sync)
+
+      assert_equal resume_at.to_i, ranges.first.first.to_i
+      assert_equal 2, ranges.size
+      assert_nil @item.reload.regular_sync_resume_at
+
+      imported = simplefin_account.reload.raw_transactions_payload.map { |tx| tx["id"] }
+      assert_equal 3, imported.size
+    end
+  end
+
+  test "a regular sync clears the resume point once every window is imported" do
+    travel_to Time.zone.parse("2026-11-07 12:00") do
+      @item.stubs(:last_synced_at).returns(100.days.ago)
+      @item.update!(regular_sync_resume_at: 85.days.ago)
+      provider, ranges = recording_provider
+
+      SimplefinItem::Importer.new(@item, simplefin_provider: provider).send(:import_regular_sync)
+
+      assert_equal 85.days.ago.to_i, ranges.first.first.to_i
+      assert_equal 2, ranges.size
+      assert_nil @item.reload.regular_sync_resume_at
+    end
+  end
+
   test "a regular sync does not reach back more than a year" do
     travel_to Time.zone.parse("2026-11-07 12:00") do
       @item.stubs(:last_synced_at).returns(500.days.ago)
@@ -263,12 +305,20 @@ class SimplefinItem::ImporterTest < ActiveSupport::TestCase
 
     # A provider that records each dated request's range. Without an account_id
     # it returns no accounts; with one, it returns that account with one new
-    # transaction inside each dated request.
-    def recording_provider(account_id: nil)
+    # transaction inside each dated request. With fail_on_dated_call, the Nth
+    # dated request raises a Bridge error instead of returning data.
+    def recording_provider(account_id: nil, fail_on_dated_call: nil)
       ranges = []
+      dated_calls = 0
       provider = Object.new
       provider.define_singleton_method(:get_accounts) do |_access_url, start_date: nil, end_date: nil, pending: nil|
-        ranges << [ start_date, end_date ] if start_date
+        if start_date
+          dated_calls += 1
+          if fail_on_dated_call && dated_calls == fail_on_dated_call
+            raise Provider::Simplefin::SimplefinError.new("Bridge unavailable", :api_error)
+          end
+          ranges << [ start_date, end_date ]
+        end
         next { accounts: [] } unless account_id
 
         transactions = []

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_11_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -2491,6 +2491,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.boolean "pending_account_setup", default: false, null: false
     t.jsonb "raw_institution_payload"
     t.jsonb "raw_payload"
+    t.datetime "regular_sync_resume_at"
     t.boolean "scheduled_for_deletion", default: false
     t.string "status", default: "good"
     t.date "sync_start_date"
