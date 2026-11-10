@@ -24,6 +24,12 @@ module Provider::TradeRepublicTimelineEvent
     # Treat them as order executions so timelineDetailV2 is fetched and the
     # portfolio can import a trade.
     "SAVINGS_PLAN_INVOICE_CREATED" => "orderExecution",
+    # A Depotübertrag moves shares between brokers without cash changing
+    # hands. Classified as an order execution so the detail (ISIN, quantity,
+    # price) is fetched; the activities processor imports it as a cashless
+    # trade instead of a settlement.
+    "SSP_SECURITIES_TRANSFER_INCOMING" => "orderExecution",
+    "SSP_SECURITIES_TRANSFER_OUTGOING" => "orderExecution",
     "PRIVATE_MARKET_FUND_TRADE_EXECUTED" => "orderExecution",
     "IPO_TRADE_EXECUTED" => "orderExecution",
     "BANK_TRANSACTION_INCOMING" => "PAYMENT_RECEIVED",

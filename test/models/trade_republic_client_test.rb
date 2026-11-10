@@ -76,6 +76,8 @@ class TradeRepublicClientTest < ActiveSupport::TestCase
     assert_equal "orderExecution", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["SAVINGS_PLAN_INVOICE_CREATED"]
     assert_equal "DIVIDEND", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["DIVIDEND"]
     assert_equal "orderExecution", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["PRIVATE_MARKET_FUND_TRADE_EXECUTED"]
+    assert_equal "orderExecution", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["SSP_SECURITIES_TRANSFER_INCOMING"]
+    assert_equal "orderExecution", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["SSP_SECURITIES_TRANSFER_OUTGOING"]
     assert_equal "POC_CREATED", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["CARD_ATM_WITHDRAWAL"]
     assert_equal "POC_CREATED", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["CARD_TRANSACTION"]
     assert_equal "POC_CREATED", Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES["CARD_CASH_BACK"]

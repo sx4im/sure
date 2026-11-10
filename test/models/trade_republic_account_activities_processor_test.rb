@@ -695,6 +695,61 @@ class TradeRepublicAccountActivitiesProcessorTest < ActiveSupport::TestCase
     assert_not Entry.exists?(account: cash_sure, external_id: "trade_republic_event_evt_saveback")
   end
 
+  test "incoming securities transfer imports as a cashless trade priced from the detail" do
+    cash_account, cash_sure = create_linked_cash_account!
+
+    transfer = securities_transfer_event(event_type: "SSP_SECURITIES_TRANSFER_INCOMING", price: "45.12")
+    @tr_account.update!(raw_timeline_payload: [ transfer ])
+    cash_account.update!(raw_timeline_payload: [ transfer ])
+
+    TradeRepublicAccount::ActivitiesProcessor.new(@tr_account.reload).process
+    TradeRepublicAccount::ActivitiesProcessor.new(cash_account.reload).process
+
+    trade = find_trade("trade_republic_event_evt_transfer")
+    assert_not_nil trade
+    assert_equal "Trade", trade.entryable_type
+    assert_equal BigDecimal("10"), trade.entryable.qty
+    assert_equal "Buy", trade.entryable.investment_activity_label
+    # A transfer moves shares between brokers, so no cash changes hands; the
+    # value stays in the quantity and price for the cost basis.
+    assert_equal 0, trade.amount
+    assert_equal BigDecimal("45.12"), trade.entryable.price.amount
+    assert_equal "SSP_SECURITIES_TRANSFER_INCOMING", trade.entryable.extra.dig("trade_republic", "event_type")
+
+    assert_not Entry.exists?(account: cash_sure, external_id: "trade_republic_event_evt_transfer")
+  end
+
+  test "outgoing securities transfer imports as a cashless sell" do
+    import_event(securities_transfer_event(event_type: "SSP_SECURITIES_TRANSFER_OUTGOING", quantity: "-4", price: "45.12"))
+
+    trade = find_trade("trade_republic_event_evt_transfer")
+    assert_not_nil trade
+    assert_equal BigDecimal("-4"), trade.entryable.qty
+    assert_equal "Sell", trade.entryable.investment_activity_label
+    assert_equal 0, trade.amount
+    assert_equal BigDecimal("45.12"), trade.entryable.price.amount
+  end
+
+  test "securities transfer without a detail price falls back to the security's current price" do
+    security = Security.create!(ticker: "DE000BASF111", name: "BASF", exchange_operating_mic: "XETR", offline: true)
+    Security::Price.create!(security: security, date: Date.current, price: 45.12, currency: "EUR")
+
+    import_event(securities_transfer_event(event_type: "SSP_SECURITIES_TRANSFER_INCOMING"))
+
+    trade = find_trade("trade_republic_event_evt_transfer")
+    assert_not_nil trade
+    assert_equal BigDecimal("10"), trade.entryable.qty
+    assert_equal "Buy", trade.entryable.investment_activity_label
+    assert_equal 0, trade.amount
+    assert_equal BigDecimal("45.12"), trade.entryable.price.amount
+  end
+
+  test "securities transfer without any price is skipped" do
+    import_event(securities_transfer_event(event_type: "SSP_SECURITIES_TRANSFER_INCOMING"))
+
+    assert_not Entry.exists?(account: @account, external_id: "trade_republic_event_evt_transfer")
+  end
+
   test "a stock bonus imports as a portfolio trade without a cash leg" do
     cash_account, cash_sure = create_linked_cash_account!
 
@@ -2025,6 +2080,26 @@ class TradeRepublicAccountActivitiesProcessorTest < ActiveSupport::TestCase
       )
       cash_provider.ensure_account_provider!(cash_sure)
       [ cash_provider.reload, cash_sure ]
+    end
+
+    # Shaped like a stored Depotübertrag: shares and price from the detail,
+    # no cash total. The client parser signs the quantity from the title.
+    def securities_transfer_event(event_type:, event_id: "evt_transfer", quantity: "10", price: nil)
+      {
+        id: event_id,
+        timestamp: "2026-09-02T08:11:30.780+0000",
+        eventType: event_type,
+        category: "orderExecution",
+        title: "BASF",
+        subtitle: event_type.include?("OUTGOING") ? "Shares sent" : "Shares received",
+        detail: {
+          quantity: quantity,
+          isin: "DE000BASF111",
+          name: "BASF",
+          currency: "EUR",
+          price: price
+        }.compact
+      }
     end
 
     def saveback_event

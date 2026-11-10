@@ -5,6 +5,11 @@ class TradeRepublicAccount::ActivitiesProcessor
   STOCK_PERK_EVENT_TYPE = "ACQUISITION_TRADE_PERK"
   # Shares Trade Republic pays for: a trade only, without a cash leg.
   BROKER_FUNDED_TRADE_EVENT_TYPES = [ SAVEBACK_EVENT_TYPE, STOCK_PERK_EVENT_TYPE ].freeze
+  SECURITIES_TRANSFER_INCOMING_EVENT_TYPE = "SSP_SECURITIES_TRANSFER_INCOMING"
+  SECURITIES_TRANSFER_OUTGOING_EVENT_TYPE = "SSP_SECURITIES_TRANSFER_OUTGOING"
+  # A Depotübertrag moves shares between brokers: a trade only, without a
+  # cash leg, priced from the detail or the security's current price.
+  SECURITIES_TRANSFER_EVENT_TYPES = [ SECURITIES_TRANSFER_INCOMING_EVENT_TYPE, SECURITIES_TRANSFER_OUTGOING_EVENT_TYPE ].freeze
   PRIVATE_MARKETS_TRADE_EVENT_TYPE = "PRIVATE_MARKET_FUND_TRADE_EXECUTED"
   # The bonus units Trade Republic adds to a Private Markets order ("1 %
   # Bonus"). The statement credits their value and buys them with it in one
@@ -172,6 +177,7 @@ class TradeRepublicAccount::ActivitiesProcessor
       end
 
       return @trade_republic_account.holds_securities? if broker_funded_trade_event?(event)
+      return @trade_republic_account.holds_securities? if securities_transfer_event?(event)
       return true if round_up_event?(event_type)
 
       category = event[:category].to_s
@@ -198,6 +204,7 @@ class TradeRepublicAccount::ActivitiesProcessor
       event_type = event[:eventType].to_s
 
       return process_broker_funded_trade(event, detail, external_id, date) if broker_funded_trade_event?(event)
+      return process_securities_transfer(event, detail, external_id, date) if securities_transfer_event?(event)
       return process_round_up(event, detail, external_id, date) if round_up_event?(event_type)
       # Trade Republic turns a stamp duty charge's timeline item into its
       # cancellation: the item keeps the charge's amount and lists both stamp
@@ -240,6 +247,22 @@ class TradeRepublicAccount::ActivitiesProcessor
       return nil unless @trade_republic_account.holds_securities?
 
       import_order_execution(event, detail, external_id, date, moves_cash: false) ? :trade : nil
+    end
+
+    def securities_transfer_event?(event)
+      SECURITIES_TRANSFER_EVENT_TYPES.include?(event[:eventType].to_s)
+    end
+
+    # A securities transfer moves shares between brokers without cash
+    # changing hands. The quantity comes from the detail (already signed by
+    # the client parser: negative for a transfer out); the price comes from
+    # the detail when Trade Republic provides one, otherwise from the
+    # security's current market price, so the quantity movement imports
+    # instead of being dropped as incomplete.
+    def process_securities_transfer(event, detail, external_id, date)
+      return nil unless @trade_republic_account.holds_securities?
+
+      import_order_execution(event, detail, external_id, date, moves_cash: false, fallback_price: true) ? :trade : nil
     end
 
     def process_round_up(event, detail, external_id, date)
@@ -299,7 +322,7 @@ class TradeRepublicAccount::ActivitiesProcessor
       event_type == ROUND_UP_EVENT_TYPE
     end
 
-    def import_order_execution(event, detail, external_id, date, moves_cash: true)
+    def import_order_execution(event, detail, external_id, date, moves_cash: true, fallback_price: false)
       isin = detail[:isin].to_s
       quantity = parse_decimal(detail[:quantity])
 
@@ -330,6 +353,14 @@ class TradeRepublicAccount::ActivitiesProcessor
       # so the per-share price is not inflated by transaction costs.
       price = parse_decimal(detail[:price])
       price = nil if price&.zero?
+      # A transfer carries no cash total, so without a detail price there is
+      # nothing to derive the amount from. Price the trade at the security's
+      # current market price instead of dropping the quantity movement; the
+      # price backfill still replaces it when the detail provides one.
+      if price.nil? && fallback_price
+        current = security.current_price
+        price = current.amount if current&.amount&.positive? && current.currency.iso_code == (detail[:currency].presence || currency)
+      end
       amount = parse_decimal(detail[:amount])
       if (!amount || amount.zero?) && price
         gross = quantity.abs * price.abs
