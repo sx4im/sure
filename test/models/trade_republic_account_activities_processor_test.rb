@@ -470,6 +470,96 @@ class TradeRepublicAccountActivitiesProcessorTest < ActiveSupport::TestCase
     assert_equal BigDecimal("-500.00"), Entry.find_by(external_id: "trade_republic_event_evt_incoming_signed").amount
   end
 
+  test "a debit tax correction imports as a withdrawal with a positive amount" do
+    import_event({
+      id: "evt_tax_correction_debit",
+      timestamp: "2026-08-01T10:00:00Z",
+      eventType: "SSP_TAX_CORRECTION",
+      category: "PAYMENT_RECEIVED",
+      detail: { amount: "0.74", signed_amount: "-0.74", currency: "EUR" }
+    })
+
+    entry = Entry.find_by(external_id: "trade_republic_event_evt_tax_correction_debit")
+    assert_not_nil entry
+    assert_equal BigDecimal("0.74"), entry.amount
+    assert_equal "Withdrawal", entry.transaction.investment_activity_label
+  end
+
+  test "a credit tax correction invoice still imports as a tax refund" do
+    import_event({
+      id: "evt_tax_correction_credit",
+      timestamp: "2026-08-01T10:00:00Z",
+      eventType: "ssp_tax_correction_invoice",
+      category: "PAYMENT_RECEIVED",
+      detail: { amount: "12.00", signed_amount: "12.00", currency: "EUR" }
+    })
+
+    entry = Entry.find_by(external_id: "trade_republic_event_evt_tax_correction_credit")
+    assert_not_nil entry
+    assert_equal BigDecimal("-12.00"), entry.amount
+    assert_equal "Tax refund", entry.name
+    assert_nil entry.transaction.investment_activity_label
+  end
+
+  test "a tax refund with no signed direction keeps the category direction" do
+    import_event({
+      id: "evt_tax_refund_unsigned",
+      timestamp: "2026-08-01T10:00:00Z",
+      eventType: "TAX_REFUND",
+      category: "PAYMENT_RECEIVED",
+      detail: { amount: "3.00", signed_amount: "0.00", currency: "EUR" }
+    })
+
+    entry = Entry.find_by(external_id: "trade_republic_event_evt_tax_refund_unsigned")
+    assert_not_nil entry
+    assert_equal BigDecimal("-3.00"), entry.amount
+    assert_equal "Tax refund", entry.name
+  end
+
+  test "a Vorabpauschale corporate-action debit imports as a withdrawal" do
+    import_event({
+      id: "evt_vorabpauschale",
+      timestamp: "2026-08-01T10:00:00Z",
+      eventType: "SSP_CORPORATE_ACTION_CASH",
+      detail: { amount: "18.42", signed_amount: "-18.42", currency: "EUR" }
+    })
+
+    entry = Entry.find_by(external_id: "trade_republic_event_evt_vorabpauschale")
+    assert_not_nil entry
+    assert_equal BigDecimal("18.42"), entry.amount
+    assert_equal "Withdrawal", entry.transaction.investment_activity_label
+  end
+
+  test "a debit corporate-action invoice imports as a withdrawal" do
+    import_event({
+      id: "evt_corporate_action_invoice_debit",
+      timestamp: "2026-08-01T10:00:00Z",
+      eventType: "ssp_corporate_action_invoice_cash",
+      category: "DIVIDEND",
+      detail: { amount: "7.25", signed_amount: "-7.25", currency: "EUR" }
+    })
+
+    entry = Entry.find_by(external_id: "trade_republic_event_evt_corporate_action_invoice_debit")
+    assert_not_nil entry
+    assert_equal BigDecimal("7.25"), entry.amount
+    assert_equal "Withdrawal", entry.transaction.investment_activity_label
+  end
+
+  test "a debit non-dividend corporate-action cash imports as a withdrawal" do
+    import_event({
+      id: "evt_corporate_action_non_dividend_debit",
+      timestamp: "2026-08-01T10:00:00Z",
+      eventType: "SSP_CORPORATE_ACTION_CASH_NON_DIVIDEND",
+      category: "PAYMENT_RECEIVED",
+      detail: { amount: "5.10", signed_amount: "-5.10", currency: "EUR" }
+    })
+
+    entry = Entry.find_by(external_id: "trade_republic_event_evt_corporate_action_non_dividend_debit")
+    assert_not_nil entry
+    assert_equal BigDecimal("5.10"), entry.amount
+    assert_equal "Withdrawal", entry.transaction.investment_activity_label
+  end
+
   test "unknown category is skipped without guessing a transaction" do
     assert_no_difference "Entry.count" do
       import_event({

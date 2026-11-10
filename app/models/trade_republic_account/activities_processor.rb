@@ -14,6 +14,22 @@ class TradeRepublicAccount::ActivitiesProcessor
   SAVINGS_PLAN_INVOICE_EVENT_TYPE = "SAVINGS_PLAN_INVOICE_CREATED"
   SAVINGS_PLAN_EXECUTION_EVENT_TYPES = %w[TRADING_SAVINGSPLAN_EXECUTED SAVINGS_PLAN_EXECUTED].freeze
   SETTLEMENT_AMOUNT_TOLERANCE = BigDecimal("0.01")
+  # Some event types can be either a credit or a debit, but their category
+  # says nothing about the direction: a tax correction can raise the tax
+  # owed, and Trade Republic books the Vorabpauschale tax charge on
+  # accumulating funds as corporate-action cash. For those, the signed
+  # provider amount is the only direction signal. All other types keep the
+  # category-based direction, because Trade Republic uses inconsistent signs
+  # across timeline topics. The invoice forms are the same events in
+  # invoice shape, so they are listed alongside the event types.
+  SIGNED_AMOUNT_DIRECTION_EVENT_TYPES = %w[
+    SSP_TAX_CORRECTION
+    ssp_tax_correction_invoice
+    TAX_REFUND
+    SSP_CORPORATE_ACTION_CASH
+    ssp_corporate_action_invoice_cash
+    SSP_CORPORATE_ACTION_CASH_NON_DIVIDEND
+  ].freeze
   ACTIVITY_LABELS_BY_KEY = {
     "contribution" => "Contribution",
     "withdrawal" => "Withdrawal",
@@ -642,12 +658,25 @@ class TradeRepublicAccount::ActivitiesProcessor
     # PAYMENT_RECEIVED. Trade Republic uses that event type for some card
     # purchases, where the signed provider amount is negative. Normalize this
     # legacy shape before applying the standard cash direction rules.
+    # The same applies to the event types in
+    # SIGNED_AMOUNT_DIRECTION_EVENT_TYPES: their category cannot tell a
+    # credit from a debit, so a negative signed provider amount imports
+    # them as a withdrawal. A missing or zero signed amount keeps the
+    # category direction.
     def event_category(event)
       signed_amount = parse_decimal(event.dig(:detail, :signed_amount) || event.dig(:detail, :amount))
       return CATEGORY_WITHDRAWAL if event[:eventType].to_s == "CARD_CASH_BACK" && signed_amount&.negative?
+      return CATEGORY_WITHDRAWAL if SIGNED_AMOUNT_DIRECTION_EVENT_TYPES.include?(event[:eventType].to_s) &&
+        provider_signed_amount(event)&.negative?
 
       event[:category].to_s.presence ||
         Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES[event[:eventType].to_s].to_s
+    end
+
+    # Only the provider's signed amount itself, never the detail amount,
+    # which carries no consistent sign for these event types.
+    def provider_signed_amount(event)
+      parse_decimal(event.dig(:detail, :signed_amount))
     end
 
     def cash_label_key(event, default:)
@@ -661,7 +690,7 @@ class TradeRepublicAccount::ActivitiesProcessor
       when "card_refund", "CARD_REFUND", "CARD_OCT"
         "card_refund"
       when "TAX_REFUND", "SSP_TAX_CORRECTION", "ssp_tax_correction_invoice"
-        "tax_refund"
+        provider_signed_amount(event)&.negative? ? "withdrawal" : "tax_refund"
       when ROUND_UP_EVENT_TYPE
         "round_up"
       else
