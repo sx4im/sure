@@ -36,7 +36,14 @@ module Provider::LlmConcept
     raise NotImplementedError, "Subclasses must implement #suggest_bill_setup"
   end
 
-  PdfProcessingResult = Data.define(:summary, :document_type, :extracted_data)
+  # Extracted data always carries string keys: the Anthropic SDK returns
+  # tool-use input with symbol keys, and every reader digs with strings.
+  # Normalizing once, here, keeps each provider from re-learning that trap.
+  PdfProcessingResult = Data.define(:summary, :document_type, :extracted_data) do
+    def initialize(summary:, document_type:, extracted_data:)
+      super(summary: summary, document_type: document_type, extracted_data: extracted_data.to_h.deep_stringify_keys)
+    end
+  end
 
   def supports_pdf_processing?
     false

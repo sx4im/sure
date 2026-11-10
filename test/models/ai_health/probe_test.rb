@@ -273,6 +273,32 @@ class AiHealth::ProbeTest < ActiveSupport::TestCase
     assert result.passing?
   end
 
+  test "PDF vision probe passes when the Anthropic tool input uses symbol keys" do
+    tool_use = Struct.new(:type, :input).new(
+      :tool_use,
+      {
+        document_type: "bank_statement",
+        summary: "A synthetic bank statement containing no customer data.",
+        extracted_data: {
+          institution_name: AiHealth::Probe::PDF_TEST_INSTITUTION
+        }
+      }
+    )
+    response = Struct.new(:content, :usage).new([ tool_use ], nil)
+    messages = mock("anthropic_messages")
+    messages.expects(:create).returns(response)
+    @probe.stubs(:anthropic_client).returns(stub(messages: messages))
+
+    result = @probe.pdf_vision_processing(
+      provider: :anthropic,
+      endpoint: "https://api.anthropic.com",
+      access_token: "<redacted>",
+      model: "claude-sonnet-4-6"
+    )
+
+    assert result.passing?
+  end
+
   test "failed LLM probe writes a system-wide debug entry and Rails log without secrets" do
     models = stub(list: { "data" => [ { "id" => "another-model" } ] })
     @probe.stubs(:openai_client).returns(stub(models: models))
