@@ -529,7 +529,16 @@ class TradeRepublicAccount::ActivitiesProcessor
       # A user who unlinked the pair keeps it unlinked.
       return if RejectedTransfer.exists?(inflow_transaction_id: inflow.id, outflow_transaction_id: outflow.id)
 
-      Transfer.create!(inflow_transaction: inflow, outflow_transaction: outflow, status: "confirmed")
+      # Confirm through Transfer#confirm! instead of creating the transfer
+      # already confirmed: confirm! is the one place that derives the
+      # outflow kind from the destination account and assigns the
+      # Investment Contributions category, the same behavior a transfer
+      # confirmed in the UI gets. Creating the row directly skipped that,
+      # so buy settlements linked to the portfolio stayed uncategorized.
+      Transfer.transaction do
+        transfer = Transfer.create!(inflow_transaction: inflow, outflow_transaction: outflow, status: "pending")
+        transfer.confirm!
+      end
     end
 
     # Trade Republic settles in the currency of the portfolio and Crypto
