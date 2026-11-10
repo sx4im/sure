@@ -187,6 +187,28 @@ class SimplefinItem::ImporterTest < ActiveSupport::TestCase
     end
   end
 
+  test "a regular sync advances last_synced_at after each window so a failed run resumes from the last imported window" do
+    travel_to Time.zone.parse("2026-11-07 12:00") do
+      @item.stubs(:last_synced_at).returns(100.days.ago)
+      calls = 0
+      provider = Object.new
+      provider.define_singleton_method(:get_accounts) do |_access_url, start_date: nil, end_date: nil, pending: nil|
+        if start_date
+          calls += 1
+          raise Provider::Simplefin::SimplefinError.new("Bridge unavailable", :api_error) if calls >= 3
+        end
+        { accounts: [] }
+      end
+
+      assert_raises(Provider::Simplefin::SimplefinError) do
+        SimplefinItem::Importer.new(@item, simplefin_provider: provider).send(:import_regular_sync)
+      end
+
+      # Two windows completed before the failure: 130d→85d, then 85d→40d.
+      assert_equal 40.days.ago, SimplefinItem.where(id: @item.id).pick(:last_synced_at)
+    end
+  end
+
   test "a regular sync does not reach back more than a year" do
     travel_to Time.zone.parse("2026-11-07 12:00") do
       @item.stubs(:last_synced_at).returns(500.days.ago)

@@ -541,9 +541,10 @@ class SimplefinItem::Importer
       # SIMPLEFIN_INCLUDE_PENDING config. This allows users to disable pending transactions
       # if their bank's SimpleFIN integration produces duplicates when pending→posted.
       #
-      # Failed syncs do not move last_synced_at, so the window grows while a
-      # connection keeps failing. Split it into ranges the Bridge accepts, and
-      # stop at the same one-year lookback as the chunked history import.
+      # Split the range into chunks the Bridge accepts, and stop at the same
+      # one-year lookback as the chunked history import. Each window's end is
+      # persisted as it completes, so a later window's failure resumes from
+      # the last imported window instead of re-requesting the whole range.
       start_date = [ determine_sync_start_date, 1.year.ago.beginning_of_day ].max
       windows = request_windows(start_date, Time.current)
       log_sync_event("info", "SimpleFIN regular sync from #{start_date.to_date} in #{windows.size} request(s)",
@@ -579,6 +580,12 @@ class SimplefinItem::Importer
             persist_stats!
           end
         end
+
+        # Persist progress now: if a later window fails, the next attempt
+        # resumes from here instead of re-requesting every window. The 30-day
+        # sync buffer re-fetches the overlap, and transactions merge by id,
+        # so nothing is missed or duplicated.
+        advance_last_synced_at(window_end)
       end
     end
 
@@ -593,6 +600,16 @@ class SimplefinItem::Importer
         window_start = window_end
       end
       windows
+    end
+
+    # Moves last_synced_at forward to the end of a fully imported window.
+    # Single guarded statement so overlapping syncs cannot drag it backwards;
+    # the in-memory item is untouched (nothing re-reads it mid-run, and the
+    # syncer still stamps Time.current once the whole sync completes).
+    def advance_last_synced_at(window_end)
+      SimplefinItem.where(id: simplefin_item.id)
+        .where("last_synced_at IS NULL OR last_synced_at < ?", window_end)
+        .update_all(last_synced_at: window_end)
     end
 
     # Records a sync event in the debug log, where self-hosters can see it.
