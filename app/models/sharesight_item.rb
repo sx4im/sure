@@ -71,7 +71,8 @@ class SharesightItem < ApplicationRecord
   end
 
   def schedule_account_syncs(parent_sync: nil, window_start_date: nil, window_end_date: nil)
-    accounts.reject { |account| account.pending_deletion? || account.disabled? }.each_with_object([]) do |account, results|
+    (accounts + cash_destination_accounts).uniq
+      .reject { |account| account.pending_deletion? || account.disabled? }.each_with_object([]) do |account, results|
       begin
         account.sync_later(
           parent_sync: parent_sync,
@@ -99,6 +100,19 @@ class SharesightItem < ApplicationRecord
   def accounts
     portfolios = sharesight_accounts.loaded? ? sharesight_accounts : sharesight_accounts.includes(:account, :linked_account)
     portfolios.filter_map(&:current_account).uniq
+  end
+
+  # The manual accounts a Sharesight sync books cash into. Their stored
+  # balance only moves when they sync, so they ride along with the
+  # portfolios. Bank-fed accounts are left out: their own provider sync
+  # picks the entries up.
+  def cash_destination_accounts
+    sharesight_accounts.includes(:settlement_account, :dividend_account).flat_map do |sharesight_account|
+      destinations = []
+      destinations << sharesight_account.settlement_account if sharesight_account.cash_mode == "settlement"
+      destinations << sharesight_account.dividend_account if sharesight_account.dividend_mode == "other_account"
+      destinations
+    end.compact.uniq.select(&:manual?)
   end
 
   def linked_sharesight_accounts
