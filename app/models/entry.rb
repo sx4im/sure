@@ -58,6 +58,7 @@ class Entry < ApplicationRecord
   }
 
   before_destroy :prevent_individual_child_deletion, if: :split_child?
+  before_destroy :record_enable_banking_deletion, if: :enable_banking_entry?
   after_save :track_earliest_saved_date, if: :saved_change_to_date?
 
   scope :visible, -> {
@@ -764,6 +765,38 @@ class Entry < ApplicationRecord
       return if destroyed_by_association || unsplitting
 
       throw :abort
+    end
+
+    # True for a transaction imported from Enable Banking. Only those carry an
+    # external_id the provider can re-import, so only those need a deletion
+    # record; manual and CSV entries never reach the provider sync.
+    def enable_banking_entry?
+      source == "enable_banking" && external_id.present? && entryable_type == "Transaction"
+    end
+
+    # A provider-sourced entry the user deletes must stay deleted: the stored
+    # provider payload is re-walked on every sync, so without a record of the
+    # deletion the next sync re-imports it (#4848). The entry's own
+    # external_id plus every identity it had retired (superseded /
+    # auto-claimed / merged ids) are recorded on the provider account, which
+    # the batch processor reads into its skip list. Runs in before_destroy so
+    # the transaction's extra is still readable, and inside the destroy
+    # transaction, so a rolled-back destroy rolls the record back too.
+    def record_enable_banking_deletion
+      transaction = entryable
+      return unless transaction.is_a?(Transaction)
+
+      extra = transaction.extra.presence || {}
+      retired_ids = Array(extra["superseded_external_ids"]) +
+                    Array(extra["auto_claimed_pending_ids"]) +
+                    Array.wrap(extra["manual_merge"])
+                         .select { |merge| merge.is_a?(Hash) }
+                         .filter_map { |merge| merge["merged_from_external_id"] }
+
+      provider_account = account&.account_providers
+                                &.find_by(provider_type: "EnableBankingAccount")
+                                &.provider
+      provider_account&.record_deleted_external_ids!(external_id, *retired_ids)
     end
 
     # Deliberately does not fall back to a generic label like "Unknown

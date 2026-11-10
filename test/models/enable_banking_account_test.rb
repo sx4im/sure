@@ -149,4 +149,25 @@ class EnableBankingAccountTest < ActiveSupport::TestCase
     })
     assert_equal [], @account.reload.identification_hashes
   end
+
+  # record_deleted_external_ids! appends and dedupes
+  test "records deleted external ids without duplicates" do
+    @account.record_deleted_external_ids!("enable_banking_A", "enable_banking_B")
+    @account.record_deleted_external_ids!("enable_banking_B", "enable_banking_C")
+
+    assert_equal %w[enable_banking_A enable_banking_B enable_banking_C],
+                 @account.reload.deleted_external_ids
+  end
+
+  test "ignores blank ids when recording deletions" do
+    @account.record_deleted_external_ids!("", nil, "enable_banking_A")
+
+    assert_equal [ "enable_banking_A" ], @account.reload.deleted_external_ids
+  end
+
+  test "records nothing for an empty deletion" do
+    assert_no_changes -> { @account.reload.deleted_external_ids } do
+      @account.record_deleted_external_ids!()
+    end
+  end
 end

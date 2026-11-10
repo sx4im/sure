@@ -371,4 +371,64 @@ class EnableBankingAccount::Transactions::ProcessorTest < ActiveSupport::TestCas
     assert_equal 0,    result[:imported]
     assert_equal 0,    result[:failed]
   end
+
+  test "a deleted entry is not re-imported on the next sync" do
+    identifierless = raw_identifierless_transaction
+
+    @enable_banking_account.update!(raw_transactions_payload: [ identifierless ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 1, @account.entries.where(source: "enable_banking").count
+
+    # Delete the entry, as the UI does.
+    @account.entries.find_by(source: "enable_banking").destroy!
+
+    result = nil
+    assert_no_difference "@account.entries.count" do
+      result = EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    end
+    assert_equal 1, result[:skipped]
+    assert_equal 0, result[:imported]
+  end
+
+  test "deleting a survivor keeps its retired identities deleted" do
+    identifierless = raw_identifierless_transaction(amount: "34.00")
+    settled = identifierless.merge(entry_reference: "2026-02-02.4")
+
+    # The identifierless row is imported, then the settled row re-keys it and
+    # records the content hash it superseded.
+    @enable_banking_account.update!(raw_transactions_payload: [ identifierless, settled ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 1, @account.entries.where(source: "enable_banking").count
+
+    survivor = @account.entries.find_by(source: "enable_banking")
+    assert_includes survivor.transaction.extra["superseded_external_ids"],
+                    EnableBankingEntry::Processor.compute_external_id(identifierless)
+
+    survivor.destroy!
+
+    # The stored payload still holds the identifierless row it superseded.
+    assert_no_difference "@account.entries.count" do
+      EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    end
+  end
+
+  test "other movements still import alongside a deleted entry" do
+    deleted = raw_identifierless_transaction(amount: "35.00")
+    fresh = raw_identifierless_transaction(amount: "36.00")
+
+    @enable_banking_account.update!(raw_transactions_payload: [ deleted ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 1, @account.entries.where(source: "enable_banking").count
+
+    @account.entries.find_by(source: "enable_banking").destroy!
+
+    @enable_banking_account.update!(raw_transactions_payload: [ deleted, fresh ])
+
+    result = nil
+    assert_difference "@account.entries.count", 1 do
+      result = EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    end
+    assert_equal 1, result[:skipped]
+    assert_equal 1, result[:imported]
+  end
 end

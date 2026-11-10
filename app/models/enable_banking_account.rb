@@ -139,6 +139,30 @@ class EnableBankingAccount < ApplicationRecord
     save!
   end
 
+  # External ids of provider entries the user deleted, plus any identities
+  # those entries had retired (superseded / auto-claimed / merged ids). The
+  # stored raw payload is never pruned and every sync re-walks all of it, so
+  # without this a deleted entry would be re-imported on the next sync
+  # (#4848). Kept on the provider account row itself rather than a separate
+  # table: unlinking the account destroys this row, which clears the list,
+  # and the batch processor already reads this row once per sync.
+  def deleted_external_ids
+    Array(read_attribute(:deleted_external_ids)).map(&:to_s).reject(&:blank?).uniq
+  end
+
+  # Records external ids as deleted. The row is locked and re-read inside the
+  # caller's transaction, so two concurrent destroys cannot lose each
+  # other's ids the way a plain read-modify-write could, and a rolled-back
+  # destroy rolls the record back too.
+  def record_deleted_external_ids!(*external_ids)
+    ids = external_ids.flatten.map(&:to_s).reject(&:blank?).uniq
+    return if ids.empty?
+
+    with_lock do
+      update_column(:deleted_external_ids, (deleted_external_ids + ids).uniq)
+    end
+  end
+
   private
 
     def build_account_name(snapshot)

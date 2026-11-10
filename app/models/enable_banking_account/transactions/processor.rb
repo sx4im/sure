@@ -96,7 +96,13 @@ class EnableBankingAccount::Transactions::Processor
                                   .compact
                                   .to_set
 
-      manually_merged_ids | auto_claimed_ids | superseded_ids
+      # 4. Deleted: entries the user deleted. Their external_ids (plus any
+      #    identities they had retired) are recorded on the provider account
+      #    when the entry is destroyed, so the stored raw payload row is
+      #    skipped on the next sync instead of being re-imported (#4848).
+      deleted_ids = enable_banking_account.deleted_external_ids.to_set
+
+      manually_merged_ids | auto_claimed_ids | superseded_ids | deleted_ids
     else
       Set.new
     end
