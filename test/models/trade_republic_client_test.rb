@@ -1104,6 +1104,17 @@ class TradeRepublicClientTest < ActiveSupport::TestCase
     )
   end
 
+  test "maps securities transfers to the transfer category and fetches their detail" do
+    categories = Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES
+    assert_equal "securitiesTransfer", categories["SSP_SECURITIES_TRANSFER_INCOMING"]
+    assert_equal "securitiesTransfer", categories["SSP_SECURITIES_TRANSFER_OUTGOING"]
+
+    %w[SSP_SECURITIES_TRANSFER_INCOMING SSP_SECURITIES_TRANSFER_OUTGOING].each do |event_type|
+      assert_equal :financial, Provider::TradeRepublicTimelineEvent.classify("eventType" => event_type), event_type
+      assert Provider::TradeRepublicClient.requires_trade_detail?("eventType" => event_type), event_type
+    end
+  end
+
   test "maps card funding, card credit and stamp duty events to cash categories" do
     categories = Provider::TradeRepublicClient::EVENT_TYPE_CATEGORIES
     assert_equal "POC_CREATED", categories["CARD_AFT"]

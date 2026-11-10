@@ -176,7 +176,10 @@ class TradeRepublicAccount::ActivitiesProcessor
 
       category = event[:category].to_s
       return category == CATEGORY_ORDER_EXECUTION if @trade_republic_account.crypto?
-      return category == CATEGORY_ORDER_EXECUTION if linked_cash_account_present? && @trade_republic_account.portfolio?
+      # A split portfolio imports order executions and securities transfers;
+      # the cash account books the settlements, and a transfer has no cash
+      # leg at all.
+      return [ CATEGORY_ORDER_EXECUTION, CATEGORY_SECURITIES_TRANSFER ].include?(category) if linked_cash_account_present? && @trade_republic_account.portfolio?
 
       true
     end
@@ -211,6 +214,8 @@ class TradeRepublicAccount::ActivitiesProcessor
         return import_order_settlement(event, detail, external_id, date) ? :transaction : nil if @trade_republic_account.cash?
 
         import_order_execution(event, detail, external_id, date) ? :trade : nil
+      when CATEGORY_SECURITIES_TRANSFER
+        import_securities_transfer(event, detail, external_id, date) ? :trade : nil
       when CATEGORY_DEPOSIT
         import_labeled_cash_movement(event, detail, external_id, date, cash_label_key(event, default: "contribution"), sign: -1)
       when CATEGORY_WITHDRAWAL
@@ -374,6 +379,71 @@ class TradeRepublicAccount::ActivitiesProcessor
           isin: isin,
           fees: detail[:fees],
           taxes: detail[:taxes],
+          provider_name: detail[:name]
+        }.compact
+      }
+
+      if entry&.entryable.is_a?(Trade) && trade_metadata[:trade_republic].present?
+        existing = entry.entryable.extra || {}
+        merged = existing.deep_merge(trade_metadata.deep_stringify_keys)
+        entry.entryable.update!(extra: merged) if merged != existing
+      end
+
+      true
+    end
+
+    # A Depotübertrag moves shares between brokers without cash changing
+    # hands. It books as a Transfer trade: the quantity moves the position
+    # and the detail price carries the cost basis, but no cash leg is
+    # created and the lot book treats it as an internal movement, so no
+    # gain is realized. The event type is the direction: the detail's title
+    # wording varies by language, so it is not trusted for the sign.
+    def import_securities_transfer(event, detail, external_id, date)
+      return nil unless @trade_republic_account.holds_securities?
+
+      isin = detail[:isin].to_s
+      quantity = parse_decimal(detail[:quantity])
+      price = parse_decimal(detail[:price])
+      price = nil if price&.zero?
+
+      if isin.blank? || quantity.nil? || quantity.zero? || price.nil?
+        record_incomplete_execution(event, date, missing: [ ("isin" if isin.blank?), ("quantity" if quantity.nil? || quantity.zero?), ("price" if price.nil?) ].compact)
+        return false
+      end
+
+      security = resolve_security(
+        isin,
+        detail[:instrument_name] || detail[:name] || event[:title],
+        symbol: detail[:symbol],
+        exchange_slug: detail[:exchange_slug]
+      )
+      return false unless security
+
+      outgoing = event[:eventType].to_s == SECURITIES_TRANSFER_OUTGOING_EVENT_TYPE
+      signed_quantity = outgoing ? -quantity.abs : quantity.abs
+
+      entry = import_adapter.import_trade(
+        external_id:    external_id,
+        security:       security,
+        quantity:       signed_quantity,
+        price:          price,
+        # A transfer moves no cash. Without a cash leg the value lives in qty
+        # and price, which is all the cost basis needs.
+        amount:         0,
+        currency:       detail[:currency].presence || currency,
+        date:           date,
+        # A bond's timeline title is only its maturity ("März 2040"); the
+        # security carries the instrument name the holding shows.
+        name:           build_trade_name(Provider::TradeRepublicClient.bond?(detail) ? nil : detail[:name], security, signed_quantity),
+        source:         "trade_republic",
+        activity_label: Trade::TRANSFER_LABEL
+      )
+
+      trade_metadata = {
+        trade_republic: {
+          event_id: event[:id],
+          event_type: event[:eventType],
+          isin: isin,
           provider_name: detail[:name]
         }.compact
       }

@@ -53,12 +53,16 @@ class Provider::TradeRepublicClient
   # Categories/event types that need timelineDetailV2 for ISIN and quantity.
   # Ordinary cash movements (card payments, transfers, interest) use the
   # timeline list amount only and must not consume the detail budget.
+  # Securities transfers also need the detail: their quantity and share price
+  # come from it, and there is no list amount to fall back on.
   TRADE_DETAIL_CATEGORY = "orderExecution"
-  TRADE_DETAIL_EVENT_TYPES = %w[
-    SAVEBACK_AGGREGATE
-    SPARE_CHANGE_AGGREGATE
-    ACQUISITION_TRADE_PERK
-  ].freeze
+  TRADE_DETAIL_EVENT_TYPES = (
+    %w[
+      SAVEBACK_AGGREGATE
+      SPARE_CHANGE_AGGREGATE
+      ACQUISITION_TRADE_PERK
+    ] + Provider::TradeRepublicTimelineEvent::SECURITIES_TRANSFER_EVENT_TYPES
+  ).freeze
   # A stock bonus is titled "Stock Bonus"; its asset row names the stock.
   STOCK_PERK_EVENT_TYPE = "ACQUISITION_TRADE_PERK"
   # New dividends also fetch timelineDetailV2 so provider_detail keeps the
