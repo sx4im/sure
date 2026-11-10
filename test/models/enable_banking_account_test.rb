@@ -149,4 +149,31 @@ class EnableBankingAccountTest < ActiveSupport::TestCase
     })
     assert_equal [], @account.reload.identification_hashes
   end
+
+  # deleted_external_ids: tombstones for user-deleted provider entries, read by
+  # EnableBankingAccount::Transactions::Processor so the stored raw payload
+  # cannot re-import them.
+  test "deleted_external_ids_for is empty until a deletion is recorded" do
+    assert_equal Set.new, @account.deleted_external_ids_for(accounts(:depository))
+  end
+
+  test "record_deleted_external_ids! merges, dedups and scopes per account" do
+    depository = accounts(:depository)
+    other = accounts(:credit_card)
+
+    @account.record_deleted_external_ids!(depository.id, [ "enable_banking_1", "enable_banking_2" ])
+    @account.record_deleted_external_ids!(depository.id, [ "enable_banking_2", "enable_banking_3" ])
+    @account.record_deleted_external_ids!(other.id, [ "enable_banking_9" ])
+
+    assert_equal Set["enable_banking_1", "enable_banking_2", "enable_banking_3"],
+                 @account.reload.deleted_external_ids_for(depository)
+    assert_equal Set["enable_banking_9"], @account.deleted_external_ids_for(other)
+  end
+
+  test "record_deleted_external_ids! ignores blank ids" do
+    @account.record_deleted_external_ids!(accounts(:depository).id, [ nil, "", "enable_banking_1" ])
+
+    assert_equal Set["enable_banking_1"],
+                 @account.reload.deleted_external_ids_for(accounts(:depository))
+  end
 end

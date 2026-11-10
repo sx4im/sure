@@ -23,6 +23,38 @@ class EnableBankingAccount < ApplicationRecord
     account
   end
 
+  # External ids of provider entries the user deleted from the given account.
+  # The stored raw payload is never pruned, so the batch processor reads these
+  # into its excluded set to keep a deleted row from being re-imported on the
+  # next sync. Scoped to the account the entries were deleted from: unlinking
+  # and re-linking the same bank account creates a new account id, so another
+  # account's deletions never suppress this one's imports.
+  #
+  # @return [Set<String>]
+  def deleted_external_ids_for(account)
+    return Set.new if account.blank?
+
+    Array(deleted_external_ids&.dig(account.id.to_s)).compact.to_set
+  end
+
+  # Record that the user deleted the given provider external ids (and any
+  # retired aliases) from the given account, so the next sync skips them.
+  # Idempotent: re-recording the same ids is a no-op. The row lock serializes
+  # concurrent deletes of entries from the same account.
+  #
+  # @return [void]
+  def record_deleted_external_ids!(account_id, external_ids)
+    ids = Array(external_ids).map(&:to_s).reject(&:blank?).uniq
+    return if ids.empty? || account_id.blank?
+
+    with_lock do
+      current = (deleted_external_ids || {}).dup
+      key = account_id.to_s
+      current[key] = ((current[key] || []) + ids).uniq
+      update!(deleted_external_ids: current)
+    end
+  end
+
   # Returns the API account ID (UUID) for Enable Banking API calls
   # The Enable Banking API requires a valid UUID for balance/transaction endpoints
   # Falls back to raw_payload["uid"] for existing accounts that have the wrong account_id stored

@@ -58,6 +58,12 @@ class Entry < ApplicationRecord
   }
 
   before_destroy :prevent_individual_child_deletion, if: :split_child?
+  # A provider entry deleted by the user must stay deleted: the stored raw
+  # payload still holds its row, so the next sync would otherwise re-import it.
+  # Runs after the split-child guard above, so a destroy that is aborted there
+  # never records anything. Only Enable Banking is covered -- other providers
+  # re-walk their own payloads through different processors.
+  before_destroy :record_enable_banking_deletion, if: -> { source == "enable_banking" && external_id.present? }
   after_save :track_earliest_saved_date, if: :saved_change_to_date?
 
   scope :visible, -> {
@@ -764,6 +770,45 @@ class Entry < ApplicationRecord
       return if destroyed_by_association || unsplitting
 
       throw :abort
+    end
+
+    # Record this entry's provider identities on its Enable Banking account so
+    # the batch processor skips them on the next sync. Runs in before_destroy,
+    # while the transaction row (and its extra) still exists, and in the same
+    # database transaction as the destroy, so a rolled-back destroy leaves no
+    # tombstone behind. No linked Enable Banking account (already unlinked)
+    # means there is nothing left to suppress, so it silently does nothing.
+    #
+    # @return [void]
+    def record_enable_banking_deletion
+      provider = account&.account_providers&.find_by(provider_type: "EnableBankingAccount")&.provider
+      return unless provider.is_a?(EnableBankingAccount)
+
+      provider.record_deleted_external_ids!(account_id, deleted_provider_external_ids)
+    end
+
+    # The identities this entry answers to: its own external_id plus every
+    # alias the entry retired -- a settled row's superseded content hash, a
+    # pending row claimed by its booked twin, and a row merged into this one.
+    # Deleting the survivor must suppress all of them, or the stored payload's
+    # identifierless row comes back as a new entry.
+    #
+    # @return [Array<String>]
+    def deleted_provider_external_ids
+      ids = [ external_id ]
+
+      if entryable.is_a?(Transaction)
+        extra = entryable.extra || {}
+        ids.concat(Array(extra["superseded_external_ids"]))
+        ids.concat(Array(extra["auto_claimed_pending_ids"]))
+
+        merge = extra["manual_merge"]
+        Array(merge.is_a?(Array) ? merge : [ merge ].compact).each do |merged|
+          ids << merged["merged_from_external_id"] if merged.is_a?(Hash)
+        end
+      end
+
+      ids.compact.map(&:to_s).reject(&:blank?).uniq
     end
 
     # Deliberately does not fall back to a generic label like "Unknown

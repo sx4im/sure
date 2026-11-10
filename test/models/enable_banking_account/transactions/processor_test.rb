@@ -342,6 +342,71 @@ class EnableBankingAccount::Transactions::ProcessorTest < ActiveSupport::TestCas
     assert_equal 0, result[:total]
   end
 
+  test "does not re-import a deleted entry on the next sync" do
+    identifierless = raw_identifierless_transaction(amount: "34.00")
+
+    @enable_banking_account.update!(raw_transactions_payload: [ identifierless ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 1, @account.entries.where(source: "enable_banking").count
+
+    @account.entries.where(source: "enable_banking").first.destroy!
+
+    assert_includes @enable_banking_account.reload.deleted_external_ids_for(@account),
+                    EnableBankingEntry::Processor.compute_external_id(identifierless)
+
+    assert_no_difference "@account.entries.count" do
+      result = EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+      assert_equal 1, result[:skipped]
+      assert_equal 0, result[:imported]
+    end
+  end
+
+  test "does not re-import a deleted survivor's retired identifierless row" do
+    identifierless = raw_identifierless_transaction(amount: "35.00")
+    settled = identifierless.merge(entry_reference: "2026-02-02.4")
+
+    @enable_banking_account.update!(raw_transactions_payload: [ identifierless ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 1, @account.entries.where(source: "enable_banking").count
+
+    # The settled row arrives: the entry is re-keyed and the content hash is recorded as superseded.
+    @enable_banking_account.update!(raw_transactions_payload: [ identifierless, settled ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 1, @account.entries.where(source: "enable_banking").count
+    survivor = @account.entries.where(source: "enable_banking").first
+    assert_equal EnableBankingEntry::Processor.compute_external_id(settled), survivor.external_id
+    assert_includes survivor.transaction.extra["superseded_external_ids"],
+                    EnableBankingEntry::Processor.compute_external_id(identifierless)
+
+    # Deleting the survivor must also suppress its retired identity, or the
+    # stored payload's identifierless row comes back as a new entry.
+    survivor.destroy!
+
+    assert_no_difference "@account.entries.count" do
+      result = EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+      assert_equal 2, result[:skipped]
+      assert_equal 0, result[:imported]
+    end
+  end
+
+  test "deleting one entry does not block other movements in the same batch" do
+    deleted_row = raw_identifierless_transaction(amount: "36.00")
+    kept_row = raw_identifierless_transaction(amount: "37.00")
+
+    @enable_banking_account.update!(raw_transactions_payload: [ deleted_row, kept_row ])
+    EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    assert_equal 2, @account.entries.where(source: "enable_banking").count
+
+    @account.entries.find_by(external_id: EnableBankingEntry::Processor.compute_external_id(deleted_row)).destroy!
+
+    result = nil
+    assert_no_difference "@account.entries.count" do
+      result = EnableBankingAccount::Transactions::Processor.new(@enable_banking_account).process
+    end
+    assert_equal 1, result[:skipped]
+    assert_equal 1, result[:imported]
+  end
+
   test "reports excluded transactions as skipped, not imported or failed" do
     pending_ext_id = "enable_banking_PDNG_SKIP_STATS"
 
