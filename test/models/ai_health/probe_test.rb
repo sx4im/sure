@@ -169,6 +169,91 @@ class AiHealth::ProbeTest < ActiveSupport::TestCase
     assert_includes document_text, AiHealth::Probe::PDF_TEST_INSTITUTION
   end
 
+  test "pdf_max_response_tokens honors AI_HEALTH_PDF_MAX_RESPONSE_TOKENS and defaults to 2048" do
+    ClimateControl.modify(AI_HEALTH_PDF_MAX_RESPONSE_TOKENS: "4096") do
+      assert_equal 4096, AiHealth::Probe.pdf_max_response_tokens
+    end
+
+    ClimateControl.modify(AI_HEALTH_PDF_MAX_RESPONSE_TOKENS: nil) do
+      assert_equal AiHealth::Probe::DEFAULT_PDF_MAX_RESPONSE_TOKENS, AiHealth::Probe.pdf_max_response_tokens
+    end
+
+    ClimateControl.modify(AI_HEALTH_PDF_MAX_RESPONSE_TOKENS: "0") do
+      assert_equal AiHealth::Probe::DEFAULT_PDF_MAX_RESPONSE_TOKENS, AiHealth::Probe.pdf_max_response_tokens
+    end
+
+    ClimateControl.modify(AI_HEALTH_PDF_MAX_RESPONSE_TOKENS: "not-a-number") do
+      assert_equal AiHealth::Probe::DEFAULT_PDF_MAX_RESPONSE_TOKENS, AiHealth::Probe.pdf_max_response_tokens
+    end
+
+    assert_equal 2048, AiHealth::Probe::DEFAULT_PDF_MAX_RESPONSE_TOKENS
+    assert_equal AiHealth::Probe.pdf_max_response_tokens, @probe.send(:pdf_max_response_tokens)
+  end
+
+  test "PDF vision probe sends the 2048-token budget a reasoning model needs" do
+    response = {
+      "choices" => [
+        {
+          "message" => {
+            "content" => {
+              document_type: "bank_statement",
+              summary: "A synthetic bank statement containing no customer data.",
+              extracted_data: {
+                institution_name: AiHealth::Probe::PDF_TEST_INSTITUTION
+              }
+            }.to_json
+          }
+        }
+      ]
+    }
+    client = mock("openai_client")
+    captured = nil
+    client.expects(:chat).with do |params|
+      captured = params
+      true
+    end.returns(response)
+    @probe.stubs(:openai_client).returns(client)
+    Provider::Openai::PdfProcessor.any_instance.expects(:convert_pdf_to_images).once.returns([ "encoded-page" ])
+
+    result = @probe.pdf_vision_processing(
+      provider: :openai,
+      endpoint: "https://api.cloudflare.example.test/v1",
+      access_token: "token",
+      model: "vision-model",
+      openai_compatible: true
+    )
+
+    assert result.passing?
+    assert_equal 2048, captured.dig(:parameters, :max_tokens)
+  end
+
+  test "PDF vision probe reports token exhaustion instead of an unexpected response" do
+    response = {
+      "choices" => [
+        {
+          "finish_reason" => "length",
+          "message" => { "content" => "" }
+        }
+      ]
+    }
+    client = stub(chat: response)
+    @probe.stubs(:openai_client).returns(client)
+    Provider::Openai::PdfProcessor.any_instance.stubs(:convert_pdf_to_images).returns([ "encoded-page" ])
+    Rails.logger.stubs(:error)
+    DebugLogEntry.stubs(:capture)
+
+    result = @probe.pdf_vision_processing(
+      provider: :openai,
+      endpoint: "https://api.cloudflare.example.test/v1",
+      access_token: "token",
+      model: "vision-model",
+      openai_compatible: true
+    )
+
+    assert result.failing?
+    assert_equal :response_token_limit, result.failure_code
+  end
+
   test "PDF vision probe exercises only the OpenAI vision processor and validates its result" do
     response = {
       "choices" => [

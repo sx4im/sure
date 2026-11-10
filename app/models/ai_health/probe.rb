@@ -43,7 +43,7 @@ class AiHealth
       "Transactions: 2",
       "Synthetic data only. No customer data."
     ].freeze
-    PDF_MAX_RESPONSE_TOKENS = 512
+    DEFAULT_PDF_MAX_RESPONSE_TOKENS = 2048
 
     Result = Data.define(:status, :checked_at, :failure_code, :http_status) do
       def passing?
@@ -81,6 +81,19 @@ class AiHealth
       seconds = ENV["AI_HEALTH_PROBE_TIMEOUT"].to_s.strip.to_i
       seconds = Setting.ai_health_probe_timeout.to_i unless seconds.positive?
       seconds.positive? ? seconds : DEFAULT_TIMEOUT
+    end
+
+    # Response-token budget for the synthetic PDF probes. Reasoning models
+    # spend completion tokens thinking before they answer, so a tight budget
+    # cuts their answer off entirely (finish_reason "length", empty content):
+    # at 512 tokens a reasoning model can burn the whole budget on its
+    # reasoning trace and return nothing. 2048 leaves room for the trace
+    # plus the small JSON document the probe asks for. Precedence:
+    # AI_HEALTH_PDF_MAX_RESPONSE_TOKENS > DEFAULT_PDF_MAX_RESPONSE_TOKENS,
+    # with non-positive values treated as unset.
+    def self.pdf_max_response_tokens
+      tokens = ENV["AI_HEALTH_PDF_MAX_RESPONSE_TOKENS"].to_s.strip.to_i
+      tokens.positive? ? tokens : DEFAULT_PDF_MAX_RESPONSE_TOKENS
     end
 
     def initialize(force: false, cache: Rails.cache)
@@ -239,7 +252,7 @@ class AiHealth
                 model: model,
                 pdf_content: synthetic_pdf,
                 custom_provider: openai_compatible,
-                max_response_tokens: PDF_MAX_RESPONSE_TOKENS,
+                max_response_tokens: pdf_max_response_tokens,
                 processing_mode: processing_mode
               ).process
             when :anthropic
@@ -483,6 +496,10 @@ class AiHealth
 
       def timeout
         self.class.timeout
+      end
+
+      def pdf_max_response_tokens
+        self.class.pdf_max_response_tokens
       end
 
       # Map a probe error to a machine-readable code for the admin AI status

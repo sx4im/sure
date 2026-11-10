@@ -1714,7 +1714,10 @@ endpoint**.
 
 Results are cached for 60 seconds by default. **Run checks again** bypasses the
 cache. Set `AI_HEALTH_PROBE_TIMEOUT` to change the default five-second request
-timeout and `AI_HEALTH_PROBE_CACHE_TTL` to change the cache duration. Failed
+timeout and `AI_HEALTH_PROBE_CACHE_TTL` to change the cache duration. Set
+`AI_HEALTH_PDF_MAX_RESPONSE_TOKENS` to change the 2048-token response budget
+for the synthetic PDF checks; reasoning models need the headroom because they
+spend completion tokens thinking before they answer. Failed
 checks are written as system-wide entries in **Settings → Debug logs** and to
 `Rails.logger`; endpoints are redacted and credentials are never included.
 

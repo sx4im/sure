@@ -253,7 +253,21 @@ class Provider::Openai::PdfProcessor
     end
 
     def parse_response_generic(response)
-      raw = response.dig("choices", 0, "message", "content")
+      choice = response.dig("choices", 0) || {}
+      raw = choice.dig("message", "content")
+
+      # A reasoning model spends its completion budget thinking before it
+      # answers, so a tight limit cuts the answer off entirely: the provider
+      # reports finish_reason "length" with empty content. Name that
+      # instead of letting the empty result surface as a generic
+      # invalid response.
+      if raw.blank? && choice["finish_reason"] == "length"
+        raise Provider::Openai::Error.new(
+          "PDF processing response was cut off by the response token limit",
+          failure_code: :response_token_limit
+        )
+      end
+
       parsed = parse_json_flexibly(raw)
 
       [ build_result(parsed), response["usage"] ]

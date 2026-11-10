@@ -401,6 +401,7 @@ en:
             extension_not_enabled: The PostgreSQL vector extension is not enabled
             table_not_found: The vector_store_chunks table was not found
             render_missing_binary: The pdftoppm renderer (poppler-utils) is not available in this container
+            response_token_limit: The model stopped before finishing because the response token budget was exhausted
             timeout: The service did not respond before the probe timeout
             request_failed: The service request failed
             unsupported_provider: The provider does not support this check

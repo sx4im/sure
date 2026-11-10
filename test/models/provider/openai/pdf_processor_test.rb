@@ -203,6 +203,17 @@ class Provider::Openai::PdfProcessorTest < ActiveSupport::TestCase
     end
   end
 
+  test "vision mode raises a coded error when the response is cut off by the token limit" do
+    processor = vision_processor(model: "gpt-4.1", max_response_tokens: 512)
+    processor.client.expects(:chat).returns(
+      "choices" => [ { "finish_reason" => "length", "message" => { "content" => "" } } ],
+      "usage" => { "prompt_tokens" => 10, "completion_tokens" => 512, "total_tokens" => 522 }
+    )
+
+    error = assert_raises(Provider::Openai::Error) { processor.process }
+    assert_equal :response_token_limit, error.failure_code
+  end
+
   test "legacy OpenAI PDF vision retains max_tokens" do
     processor = vision_processor(model: "gpt-4.1", max_response_tokens: 512)
     expect_vision_request(processor, model: "gpt-4.1") do |params|
