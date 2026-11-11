@@ -1066,6 +1066,12 @@ Rails.application.routes.draw do
   # MCP server endpoint for external AI assistants (JSON-RPC 2.0)
   post "mcp", to: "mcp#handle"
 
+  # Streamable HTTP clients open GET (SSE) and DELETE (session termination)
+  # on the same endpoint; this server serves neither, so answer 405
+  # (see McpController#unsupported_transport) instead of a 404 RoutingError.
+  get "mcp", to: "mcp#unsupported_transport"
+  delete "mcp", to: "mcp#unsupported_transport"
+
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
   # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", as: :rails_health_check

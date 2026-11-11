@@ -40,6 +40,17 @@ class McpController < ApplicationController
     render json: { jsonrpc: "2.0", id: request_id, result: result }
   end
 
+  # MCP's Streamable HTTP transport expects the same endpoint to serve GET
+  # (server-sent events) and DELETE (session termination) alongside POST.
+  # This server implements neither, and the transport requires a server that
+  # does not serve them to answer 405 Method Not Allowed. Without these
+  # routes Rails raises a 404 RoutingError with an HTML error page, which
+  # Streamable HTTP clients treat as a dropped connection and tear the
+  # session down even though POST still works.
+  def unsupported_transport
+    head :method_not_allowed
+  end
+
   private
 
     def parse_request_body

@@ -269,6 +269,35 @@ class McpControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # -- Unsupported Streamable HTTP methods --
+  #
+  # The server implements POST only. Streamable HTTP clients open GET (SSE)
+  # and DELETE (session termination) on the same endpoint, so those must
+  # answer 405 Method Not Allowed rather than a 404 RoutingError, which
+  # clients treat as a dropped connection.
+
+  test "GET /mcp returns 405 instead of 404 for an authenticated client" do
+    with_mcp_env do
+      get "/mcp", headers: mcp_headers(@token).merge("Accept" => "text/event-stream")
+
+      assert_response :method_not_allowed
+    end
+  end
+
+  test "DELETE /mcp returns 405 instead of 404 for an authenticated client" do
+    with_mcp_env do
+      delete "/mcp", headers: mcp_headers(@token)
+
+      assert_response :method_not_allowed
+    end
+  end
+
+  test "GET /mcp without a token is still rejected as unauthorized" do
+    get "/mcp", headers: { "Accept" => "text/event-stream" }
+
+    assert_response :unauthorized
+  end
+
   # -- initialize --
 
   test "initialize returns server info and capabilities" do
