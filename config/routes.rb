@@ -1066,6 +1066,13 @@ Rails.application.routes.draw do
   # MCP server endpoint for external AI assistants (JSON-RPC 2.0)
   post "mcp", to: "mcp#handle"
 
+  # The Streamable HTTP transport also issues GET (server-sent events) and
+  # DELETE (session termination) against this endpoint. Sure serves neither,
+  # so the spec-compliant answer is 405 Method Not Allowed — a 404 makes
+  # clients treat the session as failed.
+  get "mcp", to: "mcp#method_not_allowed"
+  delete "mcp", to: "mcp#method_not_allowed"
+
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
   # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", as: :rails_health_check

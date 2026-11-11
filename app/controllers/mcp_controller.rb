@@ -40,6 +40,14 @@ class McpController < ApplicationController
     render json: { jsonrpc: "2.0", id: request_id, result: result }
   end
 
+  # The Streamable HTTP transport expects GET (server-sent events) and DELETE
+  # (session termination) on this endpoint. Sure implements neither, so the
+  # spec-compliant answer is 405 with the allowed method advertised.
+  def method_not_allowed
+    response.headers["Allow"] = "POST"
+    head :method_not_allowed
+  end
+
   private
 
     def parse_request_body

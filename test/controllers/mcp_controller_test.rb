@@ -269,6 +269,35 @@ class McpControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # -- Unsupported methods (GET/DELETE) --
+
+  # The Streamable HTTP transport opens GET /mcp for server-sent events after
+  # a 202 notification response; a 404 there makes clients drop the session.
+  # Sure serves no SSE stream, so the spec-compliant answer is 405.
+  test "GET /mcp returns 405, not 404, for an authenticated client" do
+    with_mcp_env do
+      get "/mcp", headers: mcp_headers(@token).merge("Accept" => "text/event-stream")
+
+      assert_response :method_not_allowed
+      assert_equal "POST", response.headers["Allow"]
+    end
+  end
+
+  test "DELETE /mcp returns 405, not 404, for an authenticated client" do
+    with_mcp_env do
+      delete "/mcp", headers: mcp_headers(@token)
+
+      assert_response :method_not_allowed
+      assert_equal "POST", response.headers["Allow"]
+    end
+  end
+
+  test "GET /mcp without a token still requires authentication" do
+    get "/mcp", headers: { "Accept" => "text/event-stream" }
+
+    assert_response :unauthorized
+  end
+
   # -- initialize --
 
   test "initialize returns server info and capabilities" do
