@@ -915,6 +915,53 @@ class EnableBankingEntry::ProcessorTest < ActiveSupport::TestCase
     assert_not_equal "Card Authorization Hold", entry.name
   end
 
+  test "inverts CRDT purchase and DBIT refund when invert_transaction_signs is enabled" do
+    @enable_banking_account.update!(invert_transaction_signs: true)
+
+    purchase = {
+      entry_reference: "mps_purchase_1",
+      transaction_id: nil,
+      booking_date: Date.current.to_s,
+      transaction_amount: { amount: "1.35", currency: "EUR" },
+      credit_debit_indicator: "CRDT",
+      remittance_information: [ "Merchant A; Rome; ALTRE SPESE" ],
+      status: "BOOK"
+    }
+    refund = purchase.merge(
+      entry_reference: "mps_refund_1",
+      credit_debit_indicator: "DBIT"
+    )
+
+    purchase_entry = EnableBankingEntry::Processor.new(purchase, enable_banking_account: @enable_banking_account).process
+    refund_entry = EnableBankingEntry::Processor.new(refund, enable_banking_account: @enable_banking_account).process
+
+    assert_not_nil purchase_entry
+    assert_not_nil refund_entry
+    assert_equal BigDecimal("1.35"), purchase_entry.amount, "MPS purchase must be a positive outflow in Sure convention"
+    assert_equal BigDecimal("-1.35"), refund_entry.amount, "MPS refund must be a negative inflow in Sure convention"
+  end
+
+  test "does not invert unidentified hold amounts when invert_transaction_signs is enabled" do
+    @enable_banking_account.update!(invert_transaction_signs: true)
+
+    tx = {
+      entry_reference: nil,
+      transaction_id: nil,
+      booking_date: Date.current.to_s,
+      transaction_amount: { amount: "14.97", currency: "EUR" },
+      credit_debit_indicator: "CRDT",
+      creditor: nil,
+      remittance_information: [ "474836xxxxxx6879 003015315475" ],
+      status: "BOOK"
+    }
+
+    entry = EnableBankingEntry::Processor.new(tx, enable_banking_account: @enable_banking_account).process
+
+    assert_not_nil entry
+    assert_equal BigDecimal("14.97"), entry.amount, "Hold must stay a positive outflow even with sign inversion enabled"
+    assert_equal "Card Authorization Hold", entry.name
+  end
+
   test "masked_card_descriptor? detects masked card numbers in remittance or bank transaction code" do
     assert EnableBankingEntry::Processor.masked_card_descriptor?(remittance_information: [ "474836xxxxxx6879 003015315475" ])
     assert EnableBankingEntry::Processor.masked_card_descriptor?(remittance_information: "474836XXXXXX6879")

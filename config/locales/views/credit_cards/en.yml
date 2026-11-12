@@ -20,6 +20,10 @@ en:
       available_credit_placeholder: '10000'
       due_day: Payment due day
       expiration_date: Expiration date
+      invert_transaction_signs_description: Enable if your bank reports this card's
+        transactions with inverted signs (purchases as credits, refunds as debits).
+        Purchases are then recorded as expenses and refunds as income.
+      invert_transaction_signs_label: Invert transaction signs
       minimum_payment: Minimum payment
       minimum_payment_placeholder: '100'
       statement_close_day: Statement closes on

@@ -414,10 +414,14 @@ class EnableBankingEntry::Processor
         # and match the settled expense when it arrives.
         if unidentified_hold?
           absolute_amount
-        elsif credit_debit_indicator == "CRDT"
-          -absolute_amount
         else
-          absolute_amount
+          signed_amount = credit_debit_indicator == "CRDT" ? -absolute_amount : absolute_amount
+
+          # Some ASPSPs report credit_debit_indicator inverted for a whole
+          # account (e.g. MPS: purchases arrive CRDT, refunds DBIT). The
+          # per-account flag flips the sign back. Holds are excluded above:
+          # they are already normalized to positive.
+          invert_transaction_signs? ? -signed_amount : signed_amount
         end
       rescue ArgumentError => e
         Rails.logger.error "Failed to parse Enable Banking transaction amount: #{raw_amount.inspect} - #{e.message}"
@@ -427,6 +431,10 @@ class EnableBankingEntry::Processor
 
     def credit_debit_indicator
       data[:credit_debit_indicator]
+    end
+
+    def invert_transaction_signs?
+      enable_banking_account.invert_transaction_signs?
     end
 
     def counterparty_name
