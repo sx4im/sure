@@ -514,7 +514,7 @@ class EnableBankingItem::Importer
       return nil if flows.any? { |date, _| date.nil? }
 
       dated = flows.filter_map do |date, tx|
-        [ date, signed_transaction_amount(tx) ] if date >= anchor_date && date <= Date.current
+        [ date, signed_transaction_amount(tx, enable_banking_account) ] if date >= anchor_date && date <= Date.current
       end
       # An unparseable amount makes the expected balance unknowable: abstain.
       return nil if dated.any? { |_, amount| amount.nil? }
@@ -567,11 +567,15 @@ class EnableBankingItem::Importer
     end
 
     # Same sign convention as EnableBankingEntry::Processor#amount_value:
-    # DBIT (outflow) positive, CRDT (inflow) negative.
-    def signed_transaction_amount(tx)
+    # DBIT (outflow) positive, CRDT (inflow) negative. The per-account
+    # invert flag flips both, so the anchor expectation stays in step with
+    # the imported amounts. Holds never reach here (booked_raw_transactions
+    # excludes them), so no hold carve-out is needed.
+    def signed_transaction_amount(tx, enable_banking_account)
       amount = tx.dig(:transaction_amount, :amount) || tx[:amount]
       absolute = BigDecimal(amount.to_s).abs
-      tx[:credit_debit_indicator] == "CRDT" ? -absolute : absolute
+      signed = tx[:credit_debit_indicator] == "CRDT" ? -absolute : absolute
+      enable_banking_account&.invert_transaction_signs? ? -signed : signed
     rescue ArgumentError, TypeError
       nil
     end

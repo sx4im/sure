@@ -29,17 +29,32 @@ class CreditCardsController < ApplicationController
 
   private
     def update_enable_banking_settings
-      eb_params = params.permit(account: { enable_banking: [ :treat_balance_as_available_credit ] })
+      eb_params = params.permit(account: { enable_banking: [ :treat_balance_as_available_credit, :invert_transaction_signs ] })
         .dig(:account, :enable_banking)
       return if eb_params.blank?
 
-      update_provider_setting(
-        provider_type: "EnableBankingAccount",
-        attribute: :treat_balance_as_available_credit,
-        value: ActiveModel::Type::Boolean.new.cast(eb_params[:treat_balance_as_available_credit])
-      ) do |provider_account|
-        # Re-sync so the balance is reinterpreted right away instead of on the next scheduled sync
-        provider_account.enable_banking_item.sync_later
+      # A missing key means "no change", not false: the two flags share one
+      # params hash, so a partial submission must not clear the other flag.
+      if eb_params.key?(:treat_balance_as_available_credit)
+        update_provider_setting(
+          provider_type: "EnableBankingAccount",
+          attribute: :treat_balance_as_available_credit,
+          value: ActiveModel::Type::Boolean.new.cast(eb_params[:treat_balance_as_available_credit])
+        ) do |provider_account|
+          # Re-sync so the balance is reinterpreted right away instead of on the next scheduled sync
+          provider_account.enable_banking_item.sync_later
+        end
+      end
+
+      if eb_params.key?(:invert_transaction_signs)
+        update_provider_setting(
+          provider_type: "EnableBankingAccount",
+          attribute: :invert_transaction_signs,
+          value: ActiveModel::Type::Boolean.new.cast(eb_params[:invert_transaction_signs])
+        ) do |provider_account|
+          # Re-sync so already-imported transactions are re-imported with corrected signs
+          provider_account.enable_banking_item.sync_later
+        end
       end
     end
 

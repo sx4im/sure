@@ -769,6 +769,25 @@ class EnableBankingItem::ImporterBalanceTest < ActiveSupport::TestCase
     assert_equal "anchor", DebugLogEntry.order(:created_at).last.metadata["stage"]
   end
 
+  test "the anchor check inverts booked flows when the account inverts transaction signs" do
+    account = link_account(Depository.create!)
+    create_anchor(account, amount: 1000, date: 2.days.ago.to_date)
+    @enable_banking_account.update!(
+      balance_verified: true,
+      invert_transaction_signs: true,
+      raw_transactions_payload: [ booked_tx("ref-1", 1.day.ago.to_date, "50.00", indicator: "DBIT") ]
+    )
+    # The DBIT outflow is an inflow once inverted, so 1000 - (-50) = 1050.
+    # Treating it as an outflow instead (950) would pick the wrong balance.
+    stub_balances(clbd("950.00"), clbd("1050.00"))
+
+    assert @importer.send(:fetch_and_update_balance, @enable_banking_account)
+
+    assert_equal BigDecimal("1050.00"), @enable_banking_account.reload.current_balance
+    assert @enable_banking_account.balance_evidence_verified?
+    assert_equal "anchor", DebugLogEntry.order(:created_at).last.metadata["stage"]
+  end
+
   test "the anchor check abstains when bookings on the anchor day change the answer" do
     account = link_account(Depository.create!)
     create_anchor(account, amount: 1000, date: 2.days.ago.to_date)

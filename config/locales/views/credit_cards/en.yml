@@ -36,6 +36,11 @@ en:
         transactions. An override also corrects this card's transaction signs on the
         next sync.
       sophtron_balance_sign_label: Sophtron balance meaning
+      invert_transaction_signs_description: Enable if your bank reports
+        this card's transactions with the direction backwards, purchases as
+        credits and refunds as debits. Purchases are then recorded as expenses
+        and refunds as income.
+      invert_transaction_signs_label: Invert transaction signs
       simplefin_balance_sign_auto: Automatic
       simplefin_balance_sign_credit: Credit (bank owes you)
       simplefin_balance_sign_debt: Debt (you owe the bank)
